@@ -16,8 +16,8 @@
   },
   "vars": {
     "AUTH_MODE": "access",
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": "",
+    "ACCESS_TEAM_DOMAIN": "iieao.cloudflareaccess.com",
+    "ACCESS_AUD": "d31f307bff203a854b7bc420a4ba325e7b25c2f486afdce4bc7f09d36daa489b",
     "ADMIN_EMAILS": "millychck@gmail.com",
     "AI_MODEL": "@cf/qwen/qwen3.8-27b"
   },
