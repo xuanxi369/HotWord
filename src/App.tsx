@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { ArrowDown, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, Copy, Download, FileCheck2, FileText, FolderOpen, Globe2, Layers3, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, Copy, Download, FileCheck2, FileText, FolderOpen, Globe2, KeyRound, Layers3, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api';
 import { CandidateSchema, categoryNames, type Candidate, type Category, type ExtractionResult, type Job, type ParsedFile } from '../shared/schema';
 import { compileHotwords, compileTranslations, fileText, validateExport, type Compiled } from '../shared/compiler';
 import { importTable } from '../shared/table-import';
 import { AnimatedNumber, ConfirmDialog, Disclosure, PrioritySlider, Segmented, Switch, Tip, Toggle, spring } from './components/ui';
+import { ModelPanel } from './components/ModelSettings';
+import { providerNames, type ModelSelection, type ModelSettings } from '../shared/models';
 
-type User = { email: string; local: boolean; model: string };
+type User = { email: string; local: boolean; role: 'admin' | 'member' };
 type Toast = { id: number; message: string; action?: () => void };
 type Stage = 1 | 2 | 3;
 const demo: Candidate[] = [
@@ -30,6 +32,8 @@ const statusNames = { queued: '排队中', running: '提取中', completed: '已
 
 export default function App() {
   const [user, setUser] = useState<User>();
+  const [modelSettings, setModelSettings] = useState<ModelSettings>(), [selection, setSelection] = useState<ModelSelection>();
+  const [modelOpen, setModelOpen] = useState(false);
   const [error, setError] = useState(''), [name, setName] = useState('');
   const [parsed, setParsed] = useState<ParsedFile>();
   const [selected, setSelected] = useState<string[]>([]);
@@ -65,6 +69,7 @@ export default function App() {
     && (view === 'all' || (view === 'review' ? needsReview(c) : excludedIds.has(c.id))));
   const pages = Math.ceil(visible.length / 30);
   const running = !!activeJob && ['queued', 'running'].includes(activeJob.status);
+  const modelReady = selection?.mode === 'team' ? !!modelSettings?.services.some(s => s.id === selection.serviceId && s.ready) : !!modelSettings?.personalReady && !!modelSettings.credentials.some(c => c.id === selection?.credentialId);
   useEffect(() => { setPage(0); }, [query, category, view]);
   useEffect(() => { setPage(p => Math.min(p, Math.max(0, pages - 1))); }, [pages]);
   useEffect(() => {
@@ -79,9 +84,14 @@ export default function App() {
     setCandidates(terms); setWarnings(nextWarnings); setReviewReady(true); setStage(2); setExample(false); setToast(undefined); resetFilters();
   }
   async function refreshJobs() { setJobs(await api<Job[]>('/api/jobs')); }
+  async function refreshModels() {
+    const next = await api<ModelSettings>('/api/models'); setModelSettings(next);
+    setSelection(current => current ?? { mode: 'team', serviceId: next.services.find(s => s.ready)?.id ?? '' });
+  }
   useEffect(() => {
     api<User>('/api/me').then(setUser).catch(e => setError(e.message));
     refreshJobs().catch(() => {});
+    refreshModels().catch(e => setError(e.message));
     return () => { parseWorker.current?.terminate(); };
   }, []);
   useEffect(() => {
@@ -91,8 +101,8 @@ export default function App() {
         const job = await api<Job>(`/api/jobs/${activeJob.id}`); setActiveJob(job);
         if (job.status === 'completed') {
           const result = await api<ExtractionResult>(`/api/jobs/${job.id}/result`);
-          ready(result.candidates, result.warnings); notify('候选词已就绪，请审核译法'); await refreshJobs();
-        } else if (job.status === 'failed') { setError(job.error || '任务失败'); await refreshJobs(); }
+          ready(result.candidates, result.warnings); notify('候选词已就绪，请审核译法'); await refreshJobs(); await refreshModels();
+        } else if (job.status === 'failed') { setError(job.error || '任务失败'); await refreshJobs(); await refreshModels(); }
       } catch (e) { setError((e as Error).message); setActiveJob(undefined); }
     }, 4000);
     return () => window.clearTimeout(timer);
@@ -125,15 +135,16 @@ export default function App() {
   async function extract() {
     setBusy(true); setError('');
     try {
-      const created = await api<{ id: string }>('/api/jobs', { method: 'POST', body: JSON.stringify({ name, segments: segments.map(({ id, label, text }) => ({ id, label, text })) }) });
+      const created = await api<{ id: string }>('/api/jobs', { method: 'POST', body: JSON.stringify({ name, selection, segments: segments.map(({ id, label, text }) => ({ id, label, text })) }) });
       setCandidates([]); setExample(false); setReviewReady(false); setToast(undefined);
-      setActiveJob(await api<Job>(`/api/jobs/${created.id}`)); await refreshJobs();
+      setActiveJob(await api<Job>(`/api/jobs/${created.id}`)); await refreshJobs(); await refreshModels();
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
   async function openJob(job: Job) {
     if (busy || running) return;
     setName(job.name); setActiveJob(job); setError(''); setParsed(undefined); setSelected([]); setCandidates([]); setReviewReady(false); setWarnings([]); setExample(false); setStage(1); setToast(undefined);
+    if (job.status === 'failed') setError(job.error || '任务失败，请重新上传资料后重试');
     if (job.status === 'completed') {
       try { const result = await api<ExtractionResult>(`/api/jobs/${job.id}/result`); ready(result.candidates, result.warnings); }
       catch (e) { setError((e as Error).message); }
@@ -187,9 +198,10 @@ export default function App() {
       <div className="workspace-label">WORKSPACE <span>团队版</span></div>
       <button className="nav-item active" onClick={() => document.getElementById('workspace')?.scrollIntoView({ behavior: reduced ? 'instant' : 'smooth' })}><Layers3 size={17}/>术语工作台<span className="nav-dot"/></button>
       <button className="nav-item" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={17}/>导入审核项目<span className="nav-shortcut">JSON</span></button>
+      <button className="nav-item" onClick={() => setModelOpen(true)}><KeyRound size={17}/>模型与密钥</button>
       <div className="history-heading">我的近期任务<Tip text="刷新云端任务"><button className="icon-button" aria-label="刷新任务" onClick={() => refreshJobs().catch(e => setError(e.message))}><RefreshCw size={14}/></button></Tip></div>
       <div className="history">{jobs.length ? jobs.map(job => <div className={`job ${activeJob?.id === job.id ? 'selected' : ''}`} key={job.id}>
-        <button className="job-main" disabled={busy || running} onClick={() => openJob(job)}><FileText size={16}/><span><b>{job.name}</b><small><i className={`status-dot ${job.status}`}/>{statusNames[job.status]} · {new Date(job.created_at).toLocaleDateString('zh-CN')}</small></span></button>
+        <button className="job-main" disabled={busy || running} onClick={() => openJob(job)}><FileText size={16}/><span><b>{job.name}</b><small><i className={`status-dot ${job.status}`}/>{statusNames[job.status]} · {job.mode === 'personal' ? '个人' : '团队'}</small><small title={job.model}>{job.model || 'Workers AI'} · {new Date(job.created_at).toLocaleDateString('zh-CN')}</small></span></button>
         <Tip text="删除云端任务"><button className="icon-button job-delete" aria-label={`删除任务 ${job.name}`} disabled={busy || running} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(job); }}><Trash2 size={14}/></button></Tip>
       </div>) : <div className="history-empty"><span className="empty-stack"><FileText size={18}/></span><p>下一场会议，从这里开始</p><small>AI 任务保留 7 天<br/>原表导入在当前浏览器完成</small></div>}</div>
       <div className="sidebar-note"><span className="note-dot"/><p>词条完整，译法准确。<br/><b>让每一场对话更顺畅。</b></p></div>
@@ -217,6 +229,7 @@ export default function App() {
               <div className="rule-note"><ShieldCheck size={16}/><p>原文件在浏览器中读取。AI 仅提取所选内容；已有双语表，可直接导入。</p></div><FormatPlayground/>
             </div>
           </div>
+          <ModelPanel settings={modelSettings} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>
           {parsed && <div className="source-options">
             <div className="selection-heading"><div><b>选择参与提取的内容</b><span>{selected.length} 项 · <AnimatedNumber value={chars}/> 字符</span></div><button className="text-button" disabled={running} onClick={() => setSelected(selected.length ? [] : parsed.segments.filter(s => s.text.trim()).map(s => s.id))}>{selected.length ? '取消全选' : '全选'}</button></div>
             <div className="segment-list">{parsed.segments.map(segment => <label key={segment.id} className={selected.includes(segment.id) ? 'selected' : ''}><input type="checkbox" disabled={!segment.text.trim() || running} checked={selected.includes(segment.id)} onChange={e => setSelected(s => e.target.checked ? [...s, segment.id] : s.filter(id => id !== segment.id))}/><span>{segment.label}</span><small>{segment.text.length.toLocaleString()} 字</small></label>)}</div>
@@ -226,10 +239,11 @@ export default function App() {
               <label>译文列<select value={targetColumn} onChange={e => setTargetColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label>
               <Switch checked={skipHeader} onChange={setSkipHeader} label="跳过每表首行" disabled={running}/><button className="button primary" disabled={!segments.length || running} onClick={directImport}>按原表导入<ArrowRight size={15}/></button>
             </div><div className="table-sample">{segments.filter(s => s.rows).slice(0, 1).map(s => <div key={s.id}><small>前两行预览</small>{s.rows!.slice(0, 2).map((r, i) => <code key={i}>{r[sourceColumn] || '（空）'}<ArrowRight size={12}/>{r[targetColumn] || '（空）'}</code>)}</div>)}</div></div>}
-            <div className="extract-action"><p>{chars > 120000 ? '超过 120000 字符，请减少页面 / 工作表或分批处理。' : '从资料中识别人名、地名、专名与关键行业术语。'}</p><button className="button primary" disabled={!user || busy || running || !name.trim() || !chars || chars > 120000} onClick={extract}><Sparkles size={16}/>AI 提取候选词<ArrowRight size={15}/></button></div>
+            <div className="extract-action"><p>{chars > 120000 ? '超过 120000 字符，请减少页面 / 工作表或分批处理。' : '从资料中识别人名、地名、专名与关键行业术语。'}</p><button className="button primary" disabled={!user || !modelReady || busy || running || !name.trim() || !chars || chars > 120000} onClick={extract}><Sparkles size={16}/>{activeJob?.status === 'failed' ? '重新提取候选词' : 'AI 提取候选词'}<ArrowRight size={15}/></button></div>
           </div>}
         </section>
-        {running && <div className="progress-panel panel" role="status"><span className="progress-icon"><LoaderCircle size={22} className="spin"/></span><div><b>{statusNames[activeJob!.status]} · {activeJob!.name}</b><p>已完成 {activeJob!.progress} / {activeJob!.total || '…'} 个片段。可稍后从近期任务恢复。</p><progress value={activeJob!.progress} max={activeJob!.total || 1}/></div></div>}
+        {activeJob && <div className="task-model-note"><b>{activeJob.mode === 'personal' ? '个人服务' : '团队服务'} · {providerNames[activeJob.provider]} · {activeJob.model || 'Workers AI'}</b><span>{activeJob.input_tokens.toLocaleString()} 输入 / {activeJob.output_tokens.toLocaleString()} 输出 Token{activeJob.usage_estimated ? '（含估计用量）' : ''}{activeJob.estimated_usd === null ? '' : ` · 预估 $${activeJob.estimated_usd.toFixed(4)}`}</span>{activeJob.status === 'failed' && <button className="text-button" onClick={() => setModelOpen(true)}>重新配置 / 手动切换服务</button>}</div>}
+        {running && <div className="progress-panel panel" role="status"><span className="progress-icon"><LoaderCircle size={22} className="spin"/></span><div><b>{statusNames[activeJob!.status]} · {activeJob!.name}</b><p>已完成 {activeJob!.progress} / {activeJob!.total || '…'} 个片段。可稍后从近期任务恢复。</p><progress value={activeJob!.progress} max={activeJob!.total || 1}/></div><button className="button secondary" disabled={deleting} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(activeJob); }}>取消任务</button></div>}
         {warnings.length > 0 && <Disclosure className="warnings" title={`${warnings.length} 条读取 / 审核提示`} open={warningsOpen} onToggle={() => setWarningsOpen(!warningsOpen)}><ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></Disclosure>}
         {reviewReady && <>
           <section className="review-section panel" ref={sections[2]}>

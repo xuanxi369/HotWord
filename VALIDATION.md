@@ -2,7 +2,11 @@
 
 日期：2026-11-10。以下结果属于本地验证，未创建 GitHub 远端仓库、未部署到 Cloudflare，也未调用真实计费 AI 模型。
 
-- `npm run check`：31 项测试通过，TypeScript 检查与前后端生产构建通过。
+- `npm run check`：65 项测试通过，TypeScript 检查与前后端生产构建通过。
+- 本次五家服务适配、个人密钥和团队入口：使用合成协议响应，验证 Responses / Messages / Chat Completions 的请求与响应，完成实际提取、原文校验及 `Somnia-梦境公链，Industrial Collaboration-产业协同` 格式回归。真实付费服务尚未调用。
+- 使用内存 SQLite 执行两份真实 D1 migration / SQL，覆盖 AES-GCM 绑定成员与引用、个人单次 / 记住密钥、并发准入、不可复用的单次密钥、额度预留与释放、团队 / 个人费用隔离、删除任务不重置每日额度、任务启动失败、重试、部分失败与过期清理。
+- 真实本地 Worker / D1 配合 Chromium 验证个人保存、清空输入、脱敏列表、团队服务管理与成员额度保存。连接成功响应由浏览器模拟，使用合成密钥；本地 D1 未保存明文密钥，localStorage / sessionStorage 均无密钥。
+- 新配置窗口已检查桌面与 390px 手机布局；手机弹窗宽度与 scrollWidth 均为 356px，无横向溢出。开发热更新时兼容旧额度响应，刷新后界面正常。
 - `npm audit`：0 个已知漏洞。替换旧 ExcelJS 为专门的只读 XLSX 解析器，PDF.js 和 Vitest 使用已修复版本，package-lock.json 锁定依赖。
 - `wrangler deploy --dry-run`：成功读取静态资源并打包 Worker、D1、R2、AI、Workflow bindings；不是线上部署。
 - 本地 D1 migration 成功。通过实际 Worker HTTP 请求检查：其他成员任务返回 404，跨站 POST 返回 403，达到成员任务额度后合法来源提交返回 429；验证数据已清除。

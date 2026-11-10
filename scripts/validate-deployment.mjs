@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 const config = JSON.parse(await readFile(new URL('../dist/glossary_studio/wrangler.json', import.meta.url), 'utf8'));
 const missing = [];
+const secretNames = ['CREDENTIAL_ENCRYPTION_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'ZHIPU_API_KEY', 'QWEN_API_KEY'];
+if (secretNames.some(name => config.vars?.[name])) missing.push('API Key 与加密主密钥必须使用 Workers Secrets，不能放在 vars');
 if (config.vars?.AUTH_MODE !== 'access') missing.push('生产 AUTH_MODE 必须为 access');
 if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(config.vars?.ACCESS_TEAM_DOMAIN ?? '')) missing.push('填写 ACCESS_TEAM_DOMAIN');
 if (!config.vars?.ACCESS_AUD) missing.push('填写 Access 应用的 ACCESS_AUD');

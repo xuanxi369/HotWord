@@ -1,5 +1,7 @@
 # GitHub 与 Cloudflare 部署
 
+五家团队 Secrets、个人凭据加密主密钥、管理员名单与新增数据库迁移的完整说明见 [模型与密钥部署](docs/api-services.md)。现有生产环境必须先应用 `0002_model_credentials.sql`，再部署本次代码。
+
 本项目已包含 Worker / Static Assets、D1 migration、私有 R2、Workflow、AI binding 和 GitHub CI 配置。部署需要你的 GitHub 仓库、Cloudflare 账号以及域名；这些信息不会从本地其他项目中猜测。
 
 ## 1. 使用 HotWord 仓库

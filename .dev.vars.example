@@ -3,3 +3,14 @@ AUTH_MODE=local
 ACCESS_TEAM_DOMAIN=
 ACCESS_AUD=
 # AI binding calls require a Cloudflare account. Direct bilingual table import works without AI.
+# Personal key storage requires a random 32-byte key, encoded as base64.
+# Generate locally: node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+CREDENTIAL_ENCRYPTION_KEY=
+# Team API keys (optional). Production: configure as Workers Secrets, never as vars.
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+DEEPSEEK_API_KEY=
+ZHIPU_API_KEY=
+QWEN_API_KEY=
+# Admin emails, comma separated. Localhost development identity is an admin.
+ADMIN_EMAILS=

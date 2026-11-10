@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { Category, type Candidate, type ExtractionResult } from '../shared/schema';
 import { termKey } from '../shared/compiler';
 import type { Env } from './env';
+import type { ModelConfig } from '../shared/models';
+import { invokeModel, ModelError, parseModelJson, type TokenUsage } from './providers';
 
 const ModelTerm = z.object({
   source: z.string().min(1).max(180), target: z.string().max(180), category: Category,
@@ -58,18 +60,16 @@ export function validateModelResult(raw: unknown, text: string, label: string, p
   return { candidates, warnings: [...new Set(warnings)] };
 }
 
-export async function extractChunk(env: Env, text: string, label: string, prefix: string): Promise<ExtractionResult> {
-  // Use the configured Cloudflare-hosted model. Never select models from document text.
-  const run = env.AI.run.bind(env.AI) as unknown as (model: string, input: Record<string, unknown>) => Promise<unknown>;
-  const result = await run(env.AI_MODEL, {
-    messages: [{ role: 'system', content: prompt }, { role: 'user', content: text }],
-    response_format: { type: 'json_schema', json_schema: schema },
-    max_completion_tokens: 12000, reasoning_effort: 'low', stream: false, store: false,
-  });
-  // Workers AI models may return a response object or Chat Completions envelope.
-  const envelope = result as { response?: unknown; choices?: { finish_reason?: string; message?: { content?: string } }[] };
-  if (envelope.choices?.[0]?.finish_reason === 'length') throw new Error('模型输出被截断，请重试或缩小输入');
-  let raw = envelope.response ?? envelope.choices?.[0]?.message?.content ?? result;
-  if (typeof raw === 'string') raw = JSON.parse(raw);
-  return validateModelResult(raw, text, label, prefix);
+export const promptTokenReserve = prompt.length + 256;
+export async function extractChunk(env: Env, config: ModelConfig, key: string, text: string, label: string, prefix: string, record: (usage: TokenUsage) => Promise<void>): Promise<ExtractionResult> {
+  let usage: TokenUsage | undefined;
+  try {
+    const result = await invokeModel(env, config, key, prompt, text, schema); usage = result.usage;
+    const raw = parseModelJson(result.value, usage);
+    try { return validateModelResult(raw, text, label, prefix); }
+    catch { throw new ModelError('模型词条格式异常或缺少必需依据，请调整模型能力或重试', false, usage); }
+  } catch (e) {
+    if (e instanceof ModelError) usage = e.usage;
+    throw e;
+  } finally { if (usage) await record(usage); }
 }

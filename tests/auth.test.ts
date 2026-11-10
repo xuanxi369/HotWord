@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { boundedJson, enforceOrigin, identify } from '../server/auth';
 import type { Env } from '../server/env';
+import { fetchApi } from '../server/http';
+import { testEnv } from './support/database';
 const state = vi.hoisted(() => ({ jwk: {} as Record<string, unknown> }));
 vi.mock('jose', async importOriginal => {
   const jose = await importOriginal<typeof import('jose')>();
@@ -15,6 +17,12 @@ async function token(aud = 'test-audience', exp = Math.floor(Date.now() / 1000) 
 }
 beforeAll(async () => { keys = await generateKeyPair('RS256'); state.jwk = { ...(await exportJWK(keys.publicKey)), kid: 'test-key', alg: 'RS256' }; });
 describe('成员身份与请求保护', () => {
+  it('真实 JWT 成员无管理员权限，管理员由服务端邮箱名单指定', async () => {
+    const runtime = { ...testEnv().env, ...env, ADMIN_EMAILS: 'admin@example.com' };
+    expect((await fetchApi(request(await token(), 'https://terms.example.com/api/admin/models'), runtime)).status).toBe(403);
+    const me = await fetchApi(request(await token(), 'https://terms.example.com/api/me'), runtime);
+    expect(await me.json()).toMatchObject({ email: 'member@example.com', role: 'member' });
+  });
   it('验证签名、应用 audience 和过期时间', async () => {
     expect(await identify(request(await token()), env)).toEqual({ email: 'member@example.com', local: false });
     await expect(identify(request(await token('other-app')), env)).rejects.toMatchObject({ status: 401 });

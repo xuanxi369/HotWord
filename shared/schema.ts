@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelSelectionSchema, type ModelConfig } from './models';
 
 export const Category = z.enum(['person', 'place', 'company', 'product', 'industry', 'other']);
 export type Category = z.infer<typeof Category>;
@@ -30,5 +31,7 @@ export const JobInputSchema = z.object({
   segments: z.array(SegmentSchema).min(1).max(80),
 }).refine(v => v.segments.reduce((n, s) => n + s.text.length, 0) <= 120_000, '解析文本超过 120000 字符，请分批处理');
 export type JobInput = z.infer<typeof JobInputSchema>;
-export type Job = { id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed'; progress: number; total: number; error: string | null; created_at: number };
+export const JobCreateSchema = JobInputSchema.safeExtend({ selection: ModelSelectionSchema });
+export type Job = { id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed'; progress: number; total: number; error: string | null; created_at: number;
+  mode: 'team' | 'personal'; provider: ModelConfig['provider']; model: string; service_name: string; input_tokens: number; output_tokens: number; estimated_usd: number | null; usage_estimated: number };
 export type ExtractionResult = { candidates: Candidate[]; warnings: string[] };

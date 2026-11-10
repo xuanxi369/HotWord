@@ -24,7 +24,7 @@
 
 ## 架构选择
 
-采用 **React + TypeScript + Vite / Cloudflare Workers Static Assets + Access + Workflows + D1 + R2 + Workers AI**。
+采用 **React + TypeScript + Vite / Cloudflare Workers Static Assets + Access + Workflows + D1 + R2 + 多服务商适配层**。支持团队统一服务和个人 API Key，配置见 [模型与密钥说明](docs/api-services.md)。
 
 ```mermaid
 flowchart LR
@@ -36,7 +36,7 @@ flowchart LR
   W --> D[(D1 用户任务记录)]
   W --> R[(R2 私有解析文本)]
   W --> F[Workflows 分片任务]
-  F --> AI[Workers AI Qwen]
+  F --> AI[OpenAI / Claude / DeepSeek / 智谱 / 千问 / Workers AI]
   F --> R
   R --> W
   W --> L
@@ -48,9 +48,9 @@ Cloudflare Workers 可以同时托管前端静态资源与 API。本项目只部
 - **Access**：成员邮箱白名单 + 邮箱一次性验证码，或接入公司 Google / Microsoft 身份系统。应用对所有路径验证 JWT 签名、issuer、audience 和有效期。生产默认拒绝未配置或未登录请求，禁用 `workers.dev` 与预览地址，避免绕过主域名入口。
 - **Web Worker**：浏览器解析 PDF、XLSX、DOCX、TXT、CSV，不把复杂文件解析塞进 Cloudflare 请求 CPU。Excel 原表导入不调用 AI。
 - **Workflows**：AI 在后台分片执行、有限重试和记录进度。每个片段失败后整项任务失败，不导出部分结果；关闭浏览器后可恢复任务。
-- **D1**：按成员隔离任务查询。原子 SQL 限额：每成员每天 30 项、同时 2 项；整个团队每天 200 项，按过去 24 小时统计。防止并发提交绕过限额。
+- **D1**：按成员隔离任务和凭据。原子 SQL 限额：每成员每天 30 项、同时 2 项；全站每天 200 项。团队 Token 与金额额度单独配置，个人模式不扣团队额度。用量和准入记录保留 30 天，删除任务不重置额度。
 - **R2**：私有桶保存解析文本和结果，原始文件留在浏览器。成功后删除输入和中间结果；结果保留 7 天，每小时清理，成员可主动删除。Workflows 持久状态只返回数量和 R2 键，避免存入正文；Cloudflare 平台日志／元数据保留由账号设置控制。
-- **AI**：默认 `@cf/qwen/qwen3.8-27b`，Cloudflare 托管的中英多语言模型，支持结构化输出，直接使用 AI binding，团队成员不用填写 API Key。模型名称由管理员服务端配置。模型提取与翻译质量需要部署后用实际会议文件评估；确定性代码负责最终格式和上限。
+- **AI**：后台可统一配置五家 Secrets，并管理开放模型、价格和成员额度；保留原有 Workers AI 默认服务。个人入口支持测试、保存自己的密钥，默认仅用于一次任务，可主动记住。AES-256-GCM 加密，任务独立快照，完成 / 失败 / 取消后删除任务密钥。所有模型继续验证原文依据并进入人工审核，失败不自动换密钥；确定性代码负责最终格式和上限。
 
 ## 运行
 
@@ -63,13 +63,15 @@ npm run db:local
 npm run dev
 ```
 
-打开终端给出的 `http://127.0.0.1:5173`。本地开发身份绕过必须同时满足 `AUTH_MODE=local` 与 localhost URL，无法用于公开域名。原表导入、编辑、限长和下载可在没有 AI 账号时运行。开发默认关闭远端 binding；真正 AI 请求需要 Cloudflare 账号与可用额度，执行 `npx wrangler login` 后，PowerShell 设置 `$env:CF_AI_REMOTE = '1'`，再运行 `npm run dev`。生产部署始终使用实际 binding，此开关只控制本地开发。
+打开终端给出的 `http://127.0.0.1:5173`。本地开发身份绕过必须同时满足 `AUTH_MODE=local` 与 localhost URL，无法用于公开域名。原表导入、编辑、限长和下载可在没有 AI 账号时运行。开发默认关闭远端 binding；原有 Workers AI binding 的真实调用需要 Cloudflare 账号与可用额度，执行 `npx wrangler login` 后，PowerShell 设置 `$env:CF_AI_REMOTE = '1'`，再运行 `npm run dev`。生产部署始终使用实际 binding，此开关只控制本地开发。
 
 ```powershell
 npm run check
 ```
 
 测试覆盖格式回归、UTF-16/BOM/CRLF 边界、专名优先、必保超限、双向冲突、完整分片、模型证据、伪造身份、JWT 签名/应用/到期和跨站请求。
+
+个人密钥本地使用前，请在被 Git 忽略的 .dev.vars 中配置 CREDENTIAL_ENCRYPTION_KEY（随机 32 字节的 Base64）；外部五家 API 调用使用自己的有效密钥与相应服务商额度，配置步骤见 [模型与密钥说明](docs/api-services.md)。
 
 ## 上传与审核
 
