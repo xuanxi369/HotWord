@@ -2,19 +2,19 @@
 
 本项目已包含 Worker / Static Assets、D1 migration、私有 R2、Workflow、AI binding 和 GitHub CI 配置。部署需要你的 GitHub 仓库、Cloudflare 账号以及域名；这些信息不会从本地其他项目中猜测。
 
-## 1. 建立独立仓库
+## 1. 使用 HotWord 仓库
 
-在本项目根目录运行，避免推送外层工作区或客户文件：
+项目根目录是 `C:\Users\杨烜曦\Desktop\HotWord`，使用该目录原有的 `.git`。当前分支为 `main`，远端 `origin` 是 `https://github.com/xuanxi369/HotWord.git`，首版项目提交已保留。
+
+在此项目根目录运行：
 
 ```powershell
 git status
-git add .
-git commit -m "Build conference glossary studio"
-git remote add origin https://github.com/你的用户名/你的仓库.git
+git remote -v
 git push -u origin main
 ```
 
-建议私有仓库。若已有本地初始提交，只需设置 remote 和 push。`.dev.vars`、环境密钥、上传文件都已忽略。
+不需要重新初始化仓库或添加另一个 origin。`.dev.vars`、环境密钥、上传文件和迁移元数据备份都已忽略。迁移本身未执行 push。
 
 ## 2. 创建 Cloudflare 资源
 
