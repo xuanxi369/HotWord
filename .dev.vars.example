@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local development only. Production always uses Access.
+AUTH_MODE=local
+ACCESS_TEAM_DOMAIN=
+ACCESS_AUD=
+# AI binding calls require a Cloudflare account. Direct bilingual table import works without AI.

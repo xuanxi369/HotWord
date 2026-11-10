@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "glossary-studio",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-11-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "vars": {
+    "AUTH_MODE": "access",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "AI_MODEL": "@cf/qwen/qwen3.8-27b"
+  },
+  "ai": { "binding": "AI" },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "glossary-studio",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "glossary-studio-private" }],
+  "workflows": [{ "name": "glossary-extraction", "binding": "EXTRACT", "class_name": "ExtractionWorkflow" }],
+  "triggers": { "crons": ["15 * * * *"] },
+  "observability": { "enabled": true }
+}
