@@ -20,6 +20,8 @@ describe('成员身份与请求保护', () => {
   it('真实 JWT 成员无管理员权限，管理员由服务端邮箱名单指定', async () => {
     const runtime = { ...testEnv().env, ...env, ADMIN_EMAILS: 'admin@example.com' };
     expect((await fetchApi(request(await token(), 'https://terms.example.com/api/admin/models'), runtime)).status).toBe(403);
+    expect((await fetchApi(request(await token(), 'https://terms.example.com/api/admin/diagnostics'), runtime)).status).toBe(403);
+    expect((await fetchApi(request(await token(), 'https://terms.example.com/api/admin/diagnostics'), { ...runtime, ADMIN_EMAILS: 'member@example.com' })).status).toBe(200);
     const me = await fetchApi(request(await token(), 'https://terms.example.com/api/me'), runtime);
     expect(await me.json()).toMatchObject({ email: 'member@example.com', role: 'member' });
   });

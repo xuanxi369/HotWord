@@ -41,6 +41,8 @@ SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
 
 0002 不是可重复执行脚本。遇到错误应核对是哪条未完成，并补齐剩余语句，不要把 “duplicate column” 一律忽略，也不要删除原表重新开始。
 
+如果已登记 0002 但模型配置仍无法读取，必须核对实际表结构。针对已完成 jobs 新增列及前四张表、缺少 admissions / ai_usage / connection_probes 的情况，使用[部分迁移修复说明](docs/repair-model-setup.md)和专用补齐 SQL。
+
 为了让以后使用 Wrangler migration 时能识别网页已经应用的文件，先创建迁移记录表：
 
 ```sql

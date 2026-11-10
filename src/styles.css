@@ -5,6 +5,10 @@
 .model-panel-heading { margin-bottom: 16px; font-size: 14px; }
 .model-choice { display: flex; gap: 12px; align-items: center; margin-top: 16px; font-size: 12px; }
 .model-choice select { flex: 1; max-width: 600px; }
+.model-load-error { margin-top: 12px; }
+.model-load-error p { margin-bottom: 6px; }
+.deployment-check { border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
+.deployment-check p, .deployment-check small { font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .model-billing { font-size: 12px; line-height: 1.8; display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 8px; }
 .model-billing svg { margin-top: 3px; }
 .model-quota { display: block; font-size: 11px; line-height: 1.8; color: var(--muted); }

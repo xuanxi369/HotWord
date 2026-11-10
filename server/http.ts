@@ -7,6 +7,7 @@ import { admitProbe, isAdmin, requireAdmin, serviceReady, services, settings, us
 import { invokeModel, ModelError } from './providers';
 import { deleteObjects, releaseTask } from './store';
 import type { Env } from './env';
+import { deploymentDiagnostics, isDatabaseSchemaError } from './diagnostics';
 
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 export async function fetchApi(request: Request, env: Env): Promise<Response> {
@@ -35,7 +36,8 @@ export async function fetchApi(request: Request, env: Env): Promise<Response> {
       else { await env.DB.prepare('DELETE FROM credentials WHERE id=? AND owner=?').bind(id, user.email).run(); response = json({ deleted: true }); }
     } else if (url.pathname.startsWith('/api/admin/')) {
       requireAdmin(env, user);
-      if (url.pathname === '/api/admin/models' && method === 'GET') {
+      if (url.pathname === '/api/admin/diagnostics' && method === 'GET') response = json(await deploymentDiagnostics(env));
+      else if (url.pathname === '/api/admin/models' && method === 'GET') {
         const all = await services(env), policies = await env.DB.prepare('SELECT config FROM member_policies').all<{ config: string }>();
         const members = await env.DB.prepare('SELECT DISTINCT owner FROM admissions ORDER BY owner LIMIT 200').all<{ owner: string }>();
         response = json({ services: all.map(s => ({ ...s, ready: serviceReady(env, s) })), policies: policies.results.map(r => JSON.parse(r.config)), members: members.results.map(r => r.owner), usage: await usageSummary(env) });
@@ -67,7 +69,8 @@ export async function fetchApi(request: Request, env: Env): Promise<Response> {
       else response = await env.ASSETS.fetch(request);
     }
   } catch (error) {
-    response = error instanceof HttpError ? json({ error: error.message, ...(error instanceof ModelError ? { retryable: error.retryable } : {}) }, error.status)
+    response = isDatabaseSchemaError(error) ? json({ error: '数据库迁移尚未完成，请管理员在 Cloudflare D1 控制台补齐迁移后重试', code: 'DATABASE_SCHEMA_INCOMPLETE' }, 503)
+      : error instanceof HttpError ? json({ error: error.message, ...(error instanceof ModelError ? { retryable: error.retryable } : {}) }, error.status)
       : error instanceof z.ZodError ? json({ error: '配置无效，请检查模型能力、区域、工作空间及数值范围' }, 400) : json({ error: '服务暂时不可用，请联系管理员检查配置' }, 500);
   }
   const headers = new Headers(response.headers);

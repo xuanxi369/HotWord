@@ -81,3 +81,9 @@ export type Credential = { id: string; name: string; masked_key: string; config:
 export type UsageSummary = { mode: 'team' | 'personal'; tasks: number; input_tokens: number; output_tokens: number; estimated_usd: number | null; estimated_calls: number; unpriced_calls: number };
 export type ModelSettings = { services: PublicService[]; credentials: Credential[]; policy: MemberPolicy; usage: UsageSummary[]; personalReady: boolean; platformDailyTasks: number; platformConcurrency: number;
   available: { teamTasks: number; teamInput: number; teamOutput: number; teamUsd: number | null; platformTasks: number; concurrency: number } };
+export type DeploymentDiagnostics = {
+  database: { status: 'ready' | 'incomplete' | 'unavailable' | 'missing_binding'; missingTables: string[]; missingColumns: string[] };
+  encryption: 'ready' | 'missing' | 'invalid';
+  bindings: Record<'DB' | 'FILES' | 'EXTRACT' | 'AI' | 'ASSETS', boolean>;
+  teamKeys: Partial<Record<Provider, boolean>>;
+};

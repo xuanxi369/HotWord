@@ -33,6 +33,7 @@ const statusNames = { queued: '排队中', running: '提取中', completed: '已
 export default function App() {
   const [user, setUser] = useState<User>();
   const [modelSettings, setModelSettings] = useState<ModelSettings>(), [selection, setSelection] = useState<ModelSelection>();
+  const [modelsLoading, setModelsLoading] = useState(true), [modelsError, setModelsError] = useState('');
   const [modelOpen, setModelOpen] = useState(false);
   const [error, setError] = useState(''), [name, setName] = useState('');
   const [parsed, setParsed] = useState<ParsedFile>();
@@ -69,7 +70,7 @@ export default function App() {
     && (view === 'all' || (view === 'review' ? needsReview(c) : excludedIds.has(c.id))));
   const pages = Math.ceil(visible.length / 30);
   const running = !!activeJob && ['queued', 'running'].includes(activeJob.status);
-  const modelReady = selection?.mode === 'team' ? !!modelSettings?.services.some(s => s.id === selection.serviceId && s.ready) : !!modelSettings?.personalReady && !!modelSettings.credentials.some(c => c.id === selection?.credentialId);
+  const modelReady = !modelsLoading && !modelsError && (selection?.mode === 'team' ? !!modelSettings?.services.some(s => s.id === selection.serviceId && s.ready) : !!modelSettings?.personalReady && !!modelSettings.credentials.some(c => c.id === selection?.credentialId));
   useEffect(() => { setPage(0); }, [query, category, view]);
   useEffect(() => { setPage(p => Math.min(p, Math.max(0, pages - 1))); }, [pages]);
   useEffect(() => {
@@ -85,8 +86,13 @@ export default function App() {
   }
   async function refreshJobs() { setJobs(await api<Job[]>('/api/jobs')); }
   async function refreshModels() {
-    const next = await api<ModelSettings>('/api/models'); setModelSettings(next);
-    setSelection(current => current ?? { mode: 'team', serviceId: next.services.find(s => s.ready)?.id ?? '' });
+    setModelsLoading(true); setModelsError('');
+    try {
+      const next = await api<ModelSettings>('/api/models'); setModelSettings(next);
+      setError(current => current === modelsError ? '' : current);
+      setSelection(current => current ?? { mode: 'team', serviceId: next.services.find(s => s.ready)?.id ?? '' });
+    } catch (e) { setModelSettings(undefined); setModelsError((e as Error).message); throw e; }
+    finally { setModelsLoading(false); }
   }
   useEffect(() => {
     api<User>('/api/me').then(setUser).catch(e => setError(e.message));
@@ -205,7 +211,7 @@ export default function App() {
         <Tip text="删除云端任务"><button className="icon-button job-delete" aria-label={`删除任务 ${job.name}`} disabled={busy || running} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(job); }}><Trash2 size={14}/></button></Tip>
       </div>) : <div className="history-empty"><span className="empty-stack"><FileText size={18}/></span><p>下一场会议，从这里开始</p><small>AI 任务保留 7 天<br/>原表导入在当前浏览器完成</small></div>}</div>
       <div className="sidebar-note"><span className="note-dot"/><p>词条完整，译法准确。<br/><b>让每一场对话更顺畅。</b></p></div>
-      <div className="sidebar-bottom"><span className="avatar">{user?.email?.[0]?.toUpperCase() || 'H'}</span><div><b>{user?.local ? '本地开发模式' : '团队成员空间'}</b><span>{user?.email ?? '正在验证登录…'}</span></div><ShieldCheck size={16}/></div>
+      <div className="sidebar-bottom"><span className="avatar">{user?.email?.[0]?.toUpperCase() || 'H'}</span><div><b>{user?.local ? '本地开发模式' : user?.role === 'admin' ? '团队管理员空间' : '团队成员空间'}</b><span>{user?.email ?? '正在验证登录…'}</span></div><ShieldCheck size={16}/></div>
     </aside>
     <main id="workspace">
       <header className="topbar"><span className="breadcrumb">工作台 <ChevronRight size={13}/> <b>{name || '新建词库'}</b></span><div className="top-actions"><span className="language-label"><Globe2 size={14}/> 中英双语</span><button className="button compact secondary" disabled={!reviewReady} onClick={saveProject}><Download size={14}/>保存项目</button></div></header>
@@ -229,7 +235,7 @@ export default function App() {
               <div className="rule-note"><ShieldCheck size={16}/><p>原文件在浏览器中读取。AI 仅提取所选内容；已有双语表，可直接导入。</p></div><FormatPlayground/>
             </div>
           </div>
-          <ModelPanel settings={modelSettings} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>
+          <ModelPanel settings={modelSettings} loading={modelsLoading} loadError={modelsError} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>
           {parsed && <div className="source-options">
             <div className="selection-heading"><div><b>选择参与提取的内容</b><span>{selected.length} 项 · <AnimatedNumber value={chars}/> 字符</span></div><button className="text-button" disabled={running} onClick={() => setSelected(selected.length ? [] : parsed.segments.filter(s => s.text.trim()).map(s => s.id))}>{selected.length ? '取消全选' : '全选'}</button></div>
             <div className="segment-list">{parsed.segments.map(segment => <label key={segment.id} className={selected.includes(segment.id) ? 'selected' : ''}><input type="checkbox" disabled={!segment.text.trim() || running} checked={selected.includes(segment.id)} onChange={e => setSelected(s => e.target.checked ? [...s, segment.id] : s.filter(id => id !== segment.id))}/><span>{segment.label}</span><small>{segment.text.length.toLocaleString()} 字</small></label>)}</div>
