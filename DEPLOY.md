@@ -86,12 +86,18 @@ INSERT OR IGNORE INTO d1_migrations(name) VALUES ('0002_model_credentials.sql');
 | vars.ADMIN_EMAILS | 管理员邮箱，多个用英文逗号分隔 |
 | d1_databases[0].database_id | 第 2 步复制的真实 D1 UUID |
 
-在顶层添加自定义域名配置，用你的实际域名替换示例：
+在最外层 `{ ... }` 对象内添加 `routes`，例如紧接现有 `name` 字段。用你的实际域名替换示例；不要把 `routes` 放在文件开头的 `{` 外面：
 
 ```jsonc
-"routes": [
-  { "pattern": "terms.example.com", "custom_domain": true }
-],
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "glossary-studio",
+  "routes": [
+    { "pattern": "terms.example.com", "custom_domain": true }
+  ],
+  // 后面继续保留现有 main、vars、bindings 等字段。
+  // 此片段仅示意插入位置，不要用它覆盖完整配置。
+}
 ```
 
 现有资源 binding 名称应保持：
@@ -122,10 +128,13 @@ Workflow 的 `class_name` 是 `ExtractionWorkflow`，会随完整 Worker 部署�
 | Root directory | 仓库根目录，通常留空或 / |
 | Build command | npm run check |
 | Deploy command | npm run validate:deploy && npx wrangler deploy |
+| 启用预览构建 | 首版关闭，当前生产配置关闭预览地址 |
 | Node 版本 | 24；也可通过 Builds 环境变量 NODE_VERSION=24 配置 |
 | 安装依赖 | 默认 npm 安装流程，项目包含 package-lock.json |
 
 如果界面提供独立 Install command，填 `npm ci`；Cloudflare 自动安装依赖时无需额外填写。无需 Pages output directory，静态资源由 Vite / Cloudflare 插件生成并随 Worker 发布。
+
+关闭预览构建后无需填写预览命令。导入页的 Cloudflare Access 保护开关不能代替第 3 节对正式自定义域名设置的 Access 应用。
 
 在 API token 项选择由 Cloudflare 创建构建 token；它用于云端部署，不是模型 API Key。部署自定义域名时，构建 token 需要对目标域名所在 zone 的 Workers Routes 编辑权限。若已有自定义 token，核对其 Workers Scripts、路由与资源权限。
 

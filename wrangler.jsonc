@@ -1,10 +1,9 @@
-"routes": [
-  { "pattern": "txt.iieao.com", "custom_domain": true }
-],
-
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "glossary-studio",
+  "routes": [
+    { "pattern": "txt.iieao.com", "custom_domain": true }
+  ],
   "main": "server/index.ts",
   "compatibility_date": "2026-11-10",
   "compatibility_flags": ["nodejs_compat"],
