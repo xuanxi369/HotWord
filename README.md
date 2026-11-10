@@ -1,8 +1,10 @@
-# 词准 · Glossary Studio
+# HotWord · 会议术语工作台
 
 面向会议同屏翻译的团队术语工作台：上传资料，选择页码或工作表，生成候选词，人工审核后下载两份 TXT。原表已有译法优先，AI 建议单独标记。
 
 本项目位于 `C:\Users\杨烜曦\Desktop\HotWord`，使用该目录原有 Git 仓库及 `origin`：`https://github.com/xuanxi369/HotWord.git`。
+
+界面参考 recent.design 的留白、胶囊组件与细腻反馈，采用 Motion 弹簧动效及 Radix 可访问组件。具体参考、交互映射与验证记录见 [设计说明](docs/design.md)。
 
 ## 固定导出规则
 
