@@ -20,7 +20,7 @@ OpenAI API Key 来自开发者平台。Claude 支持 `anthropic-workspace-id`：
 
 ## Cloudflare 后台配置
 
-先应用新增数据库迁移：`npm run db:remote`，不用重建已有数据库。再到 Worker → Settings → Variables and Secrets → Add → **Secret**，按需配置：
+网页部署按 [Cloudflare 仪表盘部署说明](../DEPLOY.md) 操作：在 D1 的 Console 应用尚未执行的数据库 SQL，不用重建已有数据库；再到 Worker → Settings → Variables and Secrets → Add → **Secret**，按需配置：
 
 | Secret 名称 | 用途 |
 | --- | --- |
@@ -31,14 +31,15 @@ OpenAI API Key 来自开发者平台。Claude 支持 `anthropic-workspace-id`：
 | ZHIPU_API_KEY | 团队智谱 |
 | QWEN_API_KEY | 团队千问，与区域匹配 |
 
-也可使用 `npx wrangler secret put OPENAI_API_KEY` 等交互命令。不要把密钥放进普通 vars、wrangler.jsonc 或 Git，部署校验拒绝配置文件里的敏感 vars。
+密钥填写在 Worker 运行时 Variables and Secrets，不是 Builds 构建变量。不要把密钥放进普通 vars、wrangler.jsonc 或 Git，部署校验拒绝配置文件里的敏感 vars。
 
 主密钥生成一次后安全保管：
 
-```powershell
-node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
-npx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
+```javascript
+btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 ```
+
+在自己浏览器的开发者工具 Console 生成后，将结果复制到 CREDENTIAL_ENCRYPTION_KEY 运行时 Secret，按仪表盘提示保存并发布。
 
 保持主密钥稳定；直接替换会使旧凭据不可解密。当前没有自动重加密工具，轮换前应完成在途任务，并让成员重新保存凭据。D1 删除表示应用不可再读取，平台备份 / 历史恢复的保留期限仍由 Cloudflare 设置决定。
 

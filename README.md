@@ -93,7 +93,7 @@ npm run check
 
 ## GitHub → Cloudflare → 域名
 
-详细步骤见 [DEPLOY.md](DEPLOY.md)。仓库只应包含代码、测试、合成演示和配置。没有真实客户文档、上传文件、API Key 或账号凭据。
+部署方式以 **Cloudflare 网页仪表盘连接 GitHub、使用 Workers Builds** 为准，个人电脑无需运行部署命令；完整网页步骤见 [DEPLOY.md](DEPLOY.md)。仓库只应包含代码、测试、合成演示和配置。没有真实客户文档、上传文件、API Key 或账号凭据。
 
 本地检查结果与未验证事项见 [VALIDATION.md](VALIDATION.md)。格式演示文件见 `samples/双语术语示例.csv`。
 
