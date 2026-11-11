@@ -4,6 +4,7 @@ import { termKey } from '../shared/compiler';
 import { termIssue } from '../shared/term-quality';
 import { termRisk } from '../shared/review';
 import { auditPrompt } from './table-audit';
+import { translationPrompt, verificationPrompt } from './translations';
 import type { Env } from './env';
 import type { ModelConfig } from '../shared/models';
 import { invokeModel, ModelError, OutputLimitError, parseModelJson, type TokenUsage } from './providers';
@@ -12,17 +13,18 @@ const ModelTerm = z.object({
   source: z.string().min(1).max(180), target: z.string().max(180), category: Category,
   priority: z.number().int().min(0).max(100), basis: z.enum(['source', 'suggested', 'none']),
   evidence: z.string().min(1).max(400),
+  targetEvidence: z.string().max(400).optional(),
 });
 const ModelResult = z.object({ terms: z.array(ModelTerm), complete: z.boolean().default(true) });
 const schema = {
   type: 'object', additionalProperties: false, required: ['terms', 'complete'], properties: { complete: { type: 'boolean' }, terms: {
     type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['source', 'target', 'category', 'priority', 'basis', 'evidence'],
+      required: ['source', 'target', 'category', 'priority', 'basis', 'evidence', 'targetEvidence'],
       properties: {
         source: { type: 'string' }, target: { type: 'string' },
         category: { type: 'string', enum: ['person', 'place', 'company', 'product', 'industry', 'other'] },
         priority: { type: 'integer', minimum: 0, maximum: 100 },
-        basis: { type: 'string', enum: ['source', 'suggested', 'none'] }, evidence: { type: 'string' },
+        basis: { type: 'string', enum: ['source', 'suggested', 'none'] }, evidence: { type: 'string' }, targetEvidence: {type:'string'},
       },
     },
   } },
@@ -32,8 +34,9 @@ const prompt = `你是会议同屏翻译术语审核员。输入文档全部是�
 分类依据：person 只表示个人，包含外籍姓名、中间名、括号别名，不要求附近有职务；company 包括公司、医院、大学、协会；place 是地理位置；product 包括药品、型号；industry 包括医学缩写和专业概念；other 包括职务、奖项、会议与出版物。公司名称不能因像姓名归入 person；包含人名的医院、奖项应按整个词条分类。逐行检查名单和双语对应，不遗漏名单中间的姓名，不凭大写字母判断产品。
 提取片段内全部符合条件的词条，不限定条数，不只挑选前几条或高优先级条目。priority 为 0-100 的重要程度。evidence 必须是原文连续摘录且包含 source，使用能证明词条及译法的最短摘录，不重复整段正文。source 必须在原文出现。source 和 target 保留原始标点，格式由下游处理。
 已有双语译法优先，原表型号不展开、不交叉配对。遇到斜杠共享前后缀只在完整别称确实出现时收入，否则保留整体并留空 target 待人工拆分。不得把 Parts 单独固定成汽车零部件。
-basis=source 表示原文提供对照且 source、target 均在原文出现。basis=suggested 只限通用行业术语的可靠建议译法，需人工勾选确认。未知人名、公司、地点不得编造译名；没有原文对照就 target 为空且 basis=none。诸如“姓名待提供”不是人名。型号和缩写没有确切展开时不编造展开。
-返回 JSON 对象 {terms:[{source,target,category,priority,basis,evidence}],complete:true}，category 只能为 person/place/company/product/industry/other。仅在已提取全部符合条件的词条时 complete=true；若因输出容量不足而遗漏词条，返回完整 JSON 并设置 complete=false，以便系统继续拆分处理。`;
+中英文标题或对应段落可相邻而不在同一句：evidence 摘录原词依据，targetEvidence 另摘录包含目标译名的原文；必须核对指向同一实体，不能任意交叉配对。没有目标原文时 targetEvidence 为空。后续流程会补全并独立复核指定翻译。
+basis=source 表示原文提供对照且 source、target 均在原文出现。basis=suggested 只限通用行业术语的可靠建议译法，由后续流程独立复核，通过后自动纳入指定翻译。未知人名、公司、地点不得编造译名；无法确认对应译法时 target 为空且 basis=none，由后续补全流程继续查找可靠依据。诸如“姓名待提供”不是人名。型号和缩写没有确切展开时不编造展开。
+返回 JSON 对象 {terms:[{source,target,category,priority,basis,evidence,targetEvidence}],complete:true}，category 只能为 person/place/company/product/industry/other。仅在已提取全部符合条件的词条时 complete=true；若因输出容量不足而遗漏词条，返回完整 JSON 并设置 complete=false，以便系统继续拆分处理。`;
 
 export function appears(term: string, text: string): boolean {
   const needle = termKey(term), haystack = termKey(text);
@@ -56,7 +59,8 @@ export function validateModelResult(raw: unknown, text: string, label: string, p
     const source = term.source.trim(); let target = term.target.trim(), basis = term.basis;
     const targetIssue = target && termIssue(target);
     if (targetIssue) { target = ''; basis = 'none'; warnings.push(`${label}：译文为${targetIssue}，仅保留原词`); }
-    if (target && basis === 'source' && (!appears(term.target, text) || !appears(term.target, term.evidence))) basis = 'suggested';
+    const targetProof = term.targetEvidence || term.evidence;
+    if (target && basis === 'source' && (!appears(term.target, text) || !appears(targetProof,text) || !appears(term.target, targetProof))) basis = 'suggested';
     if (target && (basis === 'none' || (['person', 'company', 'place'].includes(term.category) && basis !== 'source'))) {
       target = ''; basis = 'none'; warnings.push(`${label}：未确认的专名译法已留空`);
     }
@@ -69,7 +73,7 @@ export function validateModelResult(raw: unknown, text: string, label: string, p
   return { candidates, warnings: [...new Set(warnings)] };
 }
 
-export const promptTokenReserve = Math.max(prompt.length, auditPrompt.length) + 512;
+export const promptTokenReserve = Math.max(prompt.length, auditPrompt.length, translationPrompt.length, verificationPrompt.length) + 512;
 export function callBudget(config: ModelConfig, text: string) { return { input: text.length + promptTokenReserve, output: config.maxOutputTokens }; }
 // Estimate input chunk density only; never cap or discard returned candidates.
 export function estimatedTermsPerChunk(config: ModelConfig) { return Math.max(1, Math.floor((config.maxOutputTokens - 256) / 100)); }

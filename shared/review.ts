@@ -10,7 +10,7 @@ export function termRisk(source: string, target: string, category: Category): st
 }
 
 export function needsReview(c: Candidate) {
-  return Boolean(c.reviewReason || (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target));
+  return Boolean(c.reviewReason || c.translationReview || (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target));
 }
 
 export type OutputStatus = { label: string; detail: string; attention: boolean };

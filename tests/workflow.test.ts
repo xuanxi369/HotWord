@@ -40,6 +40,69 @@ async function personalJob(env: ReturnType<typeof testEnv>['env'], provider: Pro
 }
 afterEach(() => vi.unstubAllGlobals());
 describe('后台任务、清理与用量闭环', () => {
+  it('单语文档自动完成提取、译法补全和独立复核，标准译法无需逐条确认', async () => {
+    const {env,objects,sqlite}=testEnv(), dataset='无水染色\n可持续餐饮\nUnknown Person';
+    const job=await personalJob(env,'deepseek',[{id:'s',label:'主持词',text:dataset}]);
+    const fetcher=vi.fn().mockImplementation(async (_url:string,init:RequestInit)=>{
+      const messages=JSON.parse(init.body as string).messages,system=messages[0].content;
+      let terms;
+      if(system.startsWith('你是会议指定翻译词库编写员')) {
+        terms=JSON.parse(messages[1].content).terms.map((c:any)=>({id:c.id,target:c.source==='无水染色'?'Waterless Dyeing':c.source==='可持续餐饮'?'Sustainable Dining':'',basis:c.source==='Unknown Person'?'none':'suggested',certainty:c.source==='Unknown Person'?'uncertain':'standard',targetEvidence:'',reason:c.source==='Unknown Person'?'缺少官方姓名对照':'通行术语'}));
+      } else if(system.startsWith('你是独立的指定翻译复核员')) {
+        terms=JSON.parse(messages[1].content).terms.map((c:any)=>({id:c.id,approved:Boolean(c.target),reason:c.target?'标准译法':'姓名未确认'}));
+      } else terms=dataset.split('\n').map(source=>({source,target:'',category:source==='Unknown Person'?'person':'industry',priority:80,basis:'none',evidence:source}));
+      return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({terms,complete:true})}}],usage:{prompt_tokens:50,completion_tokens:30}});
+    });
+    vi.stubGlobal('fetch',fetcher);await run(env,job.id);
+    const saved=JSON.parse(objects.get(`${job.id}/result.json`)!);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(saved.candidates.filter((c:any)=>c.translation)).toHaveLength(2);
+    expect(saved.candidates.filter((c:any)=>c.translation).every((c:any)=>c.translationAuto)).toBe(true);
+    expect(saved.candidates.find((c:any)=>c.source==='Unknown Person')).toMatchObject({target:'',translation:false,translationReview:'缺少官方姓名对照'});
+    expect(compileTranslations(saved.candidates).count).toBe(2);
+    expect(sqlite.prepare('SELECT status,input_tokens,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({status:'completed',input_tokens:150,output_tokens:90});
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+  });
+  it('旧审核词条可直接补全指定翻译，不重新提取或丢失选择和出处', async () => {
+    const {env,objects}=testEnv();
+    const original=importTable([{id:'s',label:'术语',text:'',rows:[['中文','英文'],['无水染色',''],['可持续餐饮','']]}],0,1,true,true).candidates;
+    original[0].pinned=true;original[1].hot=false;
+    const credential=await saveCredential(env,owner,{name:'翻译测试',config:modelDefaults('deepseek'),apiKey:'personal-test-secret',remember:false});
+    const job=await createJob(env,owner,{name:'指定翻译补全',segments:[{id:'s',label:'原词',text:original.map(c=>c.source).join('\n')}],translationCandidates:original,selection:{mode:'personal',credentialId:credential.id}});
+    const fetcher=vi.fn().mockImplementation(async (_url:string,init:RequestInit)=>{
+      const messages=JSON.parse(init.body as string).messages,input=JSON.parse(messages[1].content).terms;
+      const terms=messages[0].content.startsWith('你是独立')?input.map((c:any)=>({id:c.id,approved:true,reason:'通行术语'})):input.map((c:any)=>({id:c.id,target:c.source==='无水染色'?'Waterless Dyeing':'Sustainable Dining',basis:'suggested',certainty:'standard',targetEvidence:'',reason:'标准译法'}));
+      return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({terms,complete:true})}}],usage:{prompt_tokens:50,completion_tokens:30}});
+    });
+    vi.stubGlobal('fetch',fetcher);await run(env,job.id);
+    const saved=JSON.parse(objects.get(`${job.id}/result.json`)!);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    saved.candidates.forEach((c:any,i:number)=>expect(c).toMatchObject({id:original[i].id,source:original[i].source,evidence:original[i].evidence,location:original[i].location,hot:original[i].hot,pinned:original[i].pinned,translation:true,translationAuto:true}));
+  });
+  it('指定翻译补全漏项时继续拆分，全部子片段复核完成才保存完整结果', async () => {
+    const {env,objects,sqlite}=testEnv(),dataset='技术词甲\n技术词乙\n技术词丙\n技术词丁';
+    const job=await personalJob(env,'deepseek',[{id:'s',label:'单语段落',text:dataset}]);
+    const fetcher=vi.fn().mockImplementation(async (_url:string,init:RequestInit)=>{
+      const messages=JSON.parse(init.body as string).messages,system=messages[0].content;
+      let terms,complete=true;
+      if(system.startsWith('你是会议指定翻译')) {
+        const input=JSON.parse(messages[1].content).terms;
+        complete=input.length<=2;
+        terms=(complete?input:input.slice(0,1)).map((c:any)=>({id:c.id,target:'Translated '+c.source,basis:'suggested',certainty:'standard',targetEvidence:'',reason:'技术术语'}));
+      } else if(system.startsWith('你是独立')) terms=JSON.parse(messages[1].content).terms.map((c:any)=>({id:c.id,approved:true,reason:'通过'}));
+      else terms=messages[1].content.split('\n').filter(Boolean).map((source:string)=>({source,target:'',category:'industry',priority:80,basis:'none',evidence:source}));
+      return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({terms,complete})}}],usage:{prompt_tokens:10,completion_tokens:10}});
+    });
+    vi.stubGlobal('fetch',fetcher);await run(env,job.id);
+    const result=JSON.parse(objects.get(`${job.id}/result.json`)!);
+    expect(result.candidates.map((c:any)=>c.source)).toEqual(dataset.split('\n'));
+    expect(result.candidates.every((c:any)=>c.translation && c.translationAuto)).toBe(true);
+    expect(new Set(result.candidates.map((c:any)=>c.id)).size).toBe(4);
+    expect(fetcher).toHaveBeenCalledTimes(8);
+    expect(result.warnings.join('')).toContain('自动拆小');
+    expect(sqlite.prepare('SELECT input_tokens,output_tokens,status FROM jobs WHERE id=?').get(job.id)).toMatchObject({input_tokens:80,output_tokens:80,status:'completed'});
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+  });
   it('原表 AI 核对缺少 id 时逐行拆分，最终保持所有配对、选择与出处', async () => {
     const { env, sqlite, objects } = testEnv();
     const original = importTable([{id:'sheet',label:'双语表',text:'',rows:[['中文','英文'],['艾玛·斯通','Emma Stone'],['徐思远','Siyuan (Alex) Xu'],['青山医院','Greenhill Hospital']]}],0,1,true,true).candidates;

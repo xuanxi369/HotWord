@@ -21,6 +21,9 @@ export const CandidateSchema = z.object({
   reviewReason: z.string().max(240).optional(),
   riskReason: z.string().max(240).optional(),
   categoryEvidence: z.string().max(240).optional(),
+  translationAuto: z.boolean().optional(),
+  translationReview: z.string().max(240).optional(),
+  targetEvidence: z.string().max(400).optional(),
 });
 export type Candidate = z.infer<typeof CandidateSchema>;
 export const SegmentSchema = z.object({
@@ -33,8 +36,10 @@ export const JobInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
   segments: z.array(SegmentSchema).min(1).max(80),
   auditCandidates: z.array(CandidateSchema).min(1).max(10000).optional(),
+  translationCandidates: z.array(CandidateSchema).min(1).max(10000).optional(),
 }).refine(v => v.segments.reduce((n, s) => n + s.text.length, 0) <= 120_000, '解析文本超过 120000 字符，请分批处理')
-  .refine(v => !v.auditCandidates || v.auditCandidates.reduce((n,c)=>n+c.source.length+c.target.length+c.evidence.length+c.location.length,0)<=120_000, '核对词条超过 120000 字符，请分批处理');
+  .refine(v => !(v.auditCandidates && v.translationCandidates), '请选择一种核对方式')
+  .refine(v => !(v.auditCandidates ?? v.translationCandidates) || (v.auditCandidates ?? v.translationCandidates)!.reduce((n,c)=>n+c.source.length+c.target.length+c.evidence.length+c.location.length,0)<=120_000, '核对词条超过 120000 字符，请分批处理');
 export type JobInput = z.infer<typeof JobInputSchema>;
 export const JobCreateSchema = JobInputSchema.safeExtend({ selection: ModelSelectionSchema });
 export type Job = { id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed'; progress: number; total: number; error: string | null; created_at: number;

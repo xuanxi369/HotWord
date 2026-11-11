@@ -30,7 +30,8 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
   const parsed = JobCreateSchema.safeParse(raw);
   if (!parsed.success) throw new HttpError(400, '输入无效，请检查模型配置、名称、片段数量及 120000 字符限制');
   const { selection } = parsed.data;
-  if (parsed.data.auditCandidates && new Set(parsed.data.auditCandidates.map(c => c.id)).size !== parsed.data.auditCandidates.length) throw new HttpError(400, '分类核对词条 ID 重复');
+  const seeded = parsed.data.auditCandidates ?? parsed.data.translationCandidates;
+  if (seeded && new Set(seeded.map(c => c.id)).size !== seeded.length) throw new HttpError(400, '核对词条 ID 重复');
   if (!parsed.data.segments.some(s => s.text.trim())) throw new HttpError(400, '输入没有文字');
   let config: ModelConfig, serviceName: string, pricing: Pricing = { input: null, output: null }, credential: StoredCredential | undefined, personalKey: string | undefined;
   if (selection.mode === 'team') {
@@ -40,7 +41,7 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     config = service.config; serviceName = service.name; pricing = { input: service.inputUsdPerMillion, output: service.outputUsdPerMillion };
   } else { credential = await ownedCredential(env, selection.credentialId, owner); config = credentialConfig(credential); serviceName = credential.name; personalKey = await decryptKey(env, credential, owner, credential.id); }
   let chunks;
-  try { chunks = extractionChunks(parsed.data.segments, config, parsed.data.auditCandidates); }
+  try { chunks = extractionChunks(parsed.data.segments, config, seeded); }
   catch (e) { throw new HttpError(400, (e as Error).message); }
   // Keep per-call estimates for reporting; they do not gate task admission.
   const reserve = callBudget(config, chunks[0].text);

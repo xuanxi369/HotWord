@@ -20,6 +20,12 @@ describe('模型输出不能替代原文证据', () => {
     const result = validateModelResult({ terms: [confirmed] }, confirmed.evidence, '第 1 页', 'test');
     expect(result.candidates[0].translation).toBe(true);
   });
+  it('译名在另一个连续段落中仍可保留原文对照，不能要求同一句出现', () => {
+    const text='围炉夜话将在八点开始。\nThe Fireside Chat will begin at eight.';
+    const raw={source:'围炉夜话',target:'Fireside Chat',category:'other',priority:80,basis:'source',evidence:'围炉夜话将在八点开始。',targetEvidence:'The Fireside Chat will begin at eight.'};
+    expect(validateModelResult({terms:[raw]},text,'正文','p').candidates[0]).toMatchObject({target:'Fireside Chat',translation:true,basis:'source'});
+    expect(validateModelResult({terms:[{...raw,targetEvidence:'Invented evidence Fireside Chat'}]},text,'正文','p').candidates[0].translation).toBe(false);
+  });
   it('伪装成原表对照但译文不在文档的专名被清空', () => {
     const result = validateModelResult({ terms: [{ ...term, basis: 'source' }] }, term.evidence, '第 1 页', 'test');
     expect(result.candidates[0].target).toBe('');
