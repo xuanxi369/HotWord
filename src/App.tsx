@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { ArrowLeft, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, Download, Ellipsis, FileCheck2, FileText, FolderOpen, Globe2, Layers3, LoaderCircle, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
@@ -79,12 +79,18 @@ export default function App() {
   const needsReview = (c: Candidate) => (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target);
   const edited = candidates.find(c => c.id === editingTerm);
   const pendingCount = candidates.filter(c => c.target.trim() && !c.translation && c.hot).length;
+  const categoryCounts = useMemo(() => {
+    const counts = { person: 0, place: 0, company: 0, product: 0, industry: 0, other: 0 };
+    for (const candidate of candidates) counts[candidate.category]++;
+    return counts;
+  }, [candidates]);
   const selectedModel = selection?.mode === 'team' ? modelSettings?.services.find(s => s.id === selection.serviceId)?.name : modelSettings?.credentials.find(c => c.id === selection?.credentialId)?.name;
   const visible = candidates.filter(c => (!query || `${c.source} ${c.target} ${c.location}`.toLowerCase().includes(query.toLowerCase()))
     && (category === 'all' || c.category === category)
     && (view === 'all' || (view === 'review' ? needsReview(c) : excludedIds.has(c.id))));
   const pages = Math.ceil(visible.length / 30);
   const running = !!activeJob && ['queued', 'running'].includes(activeJob.status);
+  const showIntro = stage === 1 && !parsed && !reviewReady && !running;
   const modelReady = !modelsLoading && !modelsError && (selection?.mode === 'team' ? !!modelSettings?.services.some(s => s.id === selection.serviceId && s.ready) : !!modelSettings?.personalReady && !!modelSettings.credentials.some(c => c.id === selection?.credentialId));
   useEffect(() => { setPage(0); }, [query, category, view]);
   useEffect(() => { setPage(p => Math.min(p, Math.max(0, pages - 1))); }, [pages]);
@@ -96,16 +102,13 @@ export default function App() {
   function notify(message: string, action?: () => void) { setToast({ id: Date.now(), message, action }); }
   function resetFilters() { setQuery(''); setCategory('all'); setView('all'); setPage(0); }
   function goTo(next: Stage) { setStage(next); setEditingTerm(undefined); }
-  useEffect(() => {
-    if (stage === 1 && !reviewReady && !parsed) return;
-    const timer = window.setTimeout(() => {
-      stageFocus.current?.focus({ preventScroll: true });
-      const workflow = document.getElementById('workflow');
-      const top = workflow?.getBoundingClientRect().top;
-      if (top !== undefined && (top < 16 || top > window.innerHeight * .65)) workflow?.scrollIntoView({ behavior: reduced ? 'instant' : 'smooth', block: 'start' });
-    }, reduced ? 0 : 220);
-    return () => window.clearTimeout(timer);
-  }, [stage, reduced]);
+  useLayoutEffect(() => {
+    if (showIntro) return;
+    stageFocus.current?.focus({ preventScroll: true });
+    const workflow = document.getElementById('workflow');
+    const top = workflow?.getBoundingClientRect().top;
+    if (top !== undefined && (top < 16 || top > window.innerHeight * .65)) workflow?.scrollIntoView({ behavior: 'instant', block: 'start' });
+  }, [stage, showIntro]);
   function ready(terms: Candidate[], nextWarnings: string[]) {
     setCandidates(terms); setWarnings(nextWarnings); setReviewReady(true); setStage(2); setExample(false); setToast(undefined); resetFilters();
   }
@@ -235,14 +238,14 @@ export default function App() {
   function showExample() { ready(demo, []); setName('格式示例'); setParsed(undefined); setSelected([]); setActiveJob(undefined); setExample(true); setError(''); }
 
   return <MotionConfig reducedMotion="user" transition={reduced ? { duration: 0 } : spring}><Tooltip.Provider delayDuration={350}>
-    <div className={`layout stage-${stage}`}>
+    <div className={`layout stage-${stage} ${showIntro ? 'with-intro' : ''}`}>
       <header className="app-header">
         <a className="brand" href="#workspace" onClick={() => goTo(1)} aria-label="HotWord 工作台"><span className="brand-mark"><Layers3 size={21}/></span><strong>HotWord<span>让对话，少一点误解。</span></strong></a>
         <nav className="header-nav" aria-label="工作台导航"><span className="header-current">会议词库</span><button onClick={() => setHistoryOpen(true)}><Clock3 size={15}/>近期任务{jobs.length > 0 && <small>{jobs.length}</small>}</button></nav>
         <div className="header-actions"><Tip text="继续编辑已保存的 JSON 项目"><button className="icon-button" aria-label="导入审核项目" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={18}/></button></Tip><Tip text="模型与密钥"><button className="icon-button" aria-label="模型与密钥" onClick={() => setModelOpen(true)}><Settings2 size={18}/></button></Tip><Tip text="使用指南"><button className="icon-button" aria-label="使用指南" onClick={() => setHelpOpen(true)}><CircleHelp size={18}/></button></Tip><span className="header-divider"/><Tip text={user?.email || '正在验证登录'}><span className="avatar" aria-label={user?.local ? '本地开发模式' : '团队成员'}>{user?.email?.[0]?.toUpperCase() || 'H'}</span></Tip></div>
       </header>
       <main id="workspace">
-        {stage === 1 && <div className={`intro ${parsed || reviewReady || running ? 'intro-compact' : ''}`}>
+        {showIntro && <div className="intro">
           <div className="eyebrow"><span/>A LITTLE PREPARATION. A BETTER CONVERSATION.</div>
           <h1>好翻译，从<span className="headline-word">准确的词</span>开始。</h1>
           <p>上传会议资料，整理专属词库。三步，轻松带走。</p>
@@ -255,7 +258,7 @@ export default function App() {
         <div className="main-body">
           <AnimatePresence initial={false}>{error && <motion.div className="alert error" role="alert" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><span>{error}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setError('')}><X size={16}/></button></motion.div>}</AnimatePresence>
           {example && <div className="example-alert"><span className="example-dot"/>示例体验 · 这些词条仅用于演示<button className="text-button" onClick={() => { goTo(1); input.current?.click(); }}>上传自己的资料<ArrowRight size={13}/></button></div>}
-          <AnimatePresence mode="wait" initial={false}><motion.div key={stage} className="stage-content" initial={{ opacity: 0, y: reduced ? 0 : 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : -6 }} transition={{ duration: reduced ? 0 : .18, ease: 'easeOut' }}>
+          <div key={stage} className="stage-content">
             {stage === 1 && <section className={`upload-section panel ${parsed ? 'file-loaded' : ''}`} aria-label="准备资料">
               {!parsed && !running && <>
                 <div className="upload-heading"><span className="small-kicker">从一份资料开始</span><h2 ref={stageFocus} tabIndex={-1}>把会议资料，放在这里。</h2><p>已有双语表直接导入，其他资料交给 AI 整理。</p></div>
@@ -286,7 +289,7 @@ export default function App() {
             {stage === 2 && reviewReady && <section className="review-section" aria-label="核对词条">
               <div className="section-title"><div><span className="small-kicker">{name || '会议词库'}</span><h2 ref={stageFocus} tabIndex={-1}>核对一下，译法就统一了。</h2></div><button className="button compact secondary" onClick={() => { const id = crypto.randomUUID(); setCandidates(c => [...c, { id, source: '新词条', target: '', category: 'other', priority: 80, basis: 'manual', evidence: '', location: '手动添加', hot: true, translation: false, pinned: false }]); resetFilters(); setPage(Math.floor(candidates.length / 30)); setEditingTerm(id); }}><Plus size={15}/>添加词条</button></div>
               <div className="review-summary"><span><b><AnimatedNumber value={candidates.length}/></b> 个词条</span><span><i className="status-dot completed"/><b>{candidates.filter(c => c.translation).length}</b> 个译法已确认</span><button className="budget-peek" onClick={() => goTo(3)}><span>热词 <b><AnimatedNumber value={hot.chars}/></b> / 2,048</span><ChevronRight size={13}/></button></div>
-              <div className="review-workspace panel"><div className="toolbar"><Segmented value={view} options={[{ value: 'all', label: '全部词条', count: candidates.length }, { value: 'review', label: '待审核', count: candidates.filter(needsReview).length }, { value: 'excluded', label: '未纳入', count: excludedIds.size }]} onChange={v => setView(v as typeof view)} label="审核视图"/><div className="search-field"><Search size={15}/><input aria-label="搜索词条" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索词条"/>{query && <button className="icon-button" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13}/></button>}</div><select aria-label="词条类别筛选" value={category} onChange={e => setCategory(e.target.value)}><option value="all">全部类别</option>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+              <div className="review-workspace panel"><div className="toolbar"><Segmented value={view} options={[{ value: 'all', label: '全部词条', count: candidates.length }, { value: 'review', label: '待审核', count: candidates.filter(needsReview).length }, { value: 'excluded', label: '未纳入', count: excludedIds.size }]} onChange={v => setView(v as typeof view)} label="审核视图"/><div className="search-field"><Search size={15}/><input aria-label="搜索词条" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索词条"/>{query && <button className="icon-button" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13}/></button>}</div><select aria-label="词条类别筛选" value={category} onChange={e => setCategory(e.target.value)}><option value="all">全部类别（{candidates.length}）</option>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}（{categoryCounts[k as Category]}）</option>)}</select></div>
                 <div className="term-head" aria-hidden="true"><span>#</span><span>原词</span><span>译文</span><span>纳入词库</span><span/></div>
                 <div className="term-list">{visible.slice(page * 30, page * 30 + 30).map((c, i) => <div key={c.id} className={`term-row ${excludedIds.has(c.id) ? 'excluded-row' : ''}`}>
                   <span className="term-index">{String(page * 30 + i + 1).padStart(2, '0')}</span><div className="term-source"><label className="mobile-cell-label" htmlFor={`source-${c.id}`}>原词</label><textarea rows={1} id={`source-${c.id}`} className="cell-input" aria-label={`原词 ${c.source}`} maxLength={180} value={c.source} onChange={e => update(c.id, { source: e.target.value, basis: 'manual' })}/><span className="category-chip">{categoryNames[c.category]}{c.pinned && <span className="pin-label"> · 必保</span>}</span></div>
@@ -306,7 +309,7 @@ export default function App() {
               <div className="save-review"><span><ShieldCheck size={14}/>已按导入格式整理，保留完整词组。</span><button className="text-button" onClick={() => setHelpOpen(true)}>查看格式规则<ArrowRight size={12}/></button></div>
               <div className="stage-actions"><button className="text-button" onClick={() => goTo(2)}><ArrowLeft size={14}/>继续核对</button><span className="action-hint">保存审核项目，下次还能接着编辑。</span><button className="button secondary" onClick={saveProject}><FolderOpen size={16}/>保存审核项目</button></div>
             </section>}
-          </motion.div></AnimatePresence>
+          </div>
           {warnings.length > 0 && <Disclosure className="warnings" title={`${warnings.length} 条资料 / 审核提示`} open={warningsOpen} onToggle={() => setWarningsOpen(!warningsOpen)}><ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></Disclosure>}
           {stage === 1 && !parsed && !running && <div className="start-shortcuts"><button className="text-button" disabled={busy} onClick={showExample}><span className="play-dot"><ArrowRight size={12}/></span>先试试一个小示例</button><span className="shortcut-divider"/><button className="text-button" disabled={busy} onClick={() => projectInput.current?.click()}><FolderOpen size={14}/>继续已有项目</button></div>}
           <footer><span>少一点误解，多一点默契。</span><span className="footer-language"><Globe2 size={12}/>中英双语<span className="footer-divider">·</span>HotWord</span></footer>

@@ -1,11 +1,12 @@
 import { termKey } from './compiler';
 import type { Candidate, ParsedSegment } from './schema';
 import { termIssue } from './term-quality';
+import { inferTermCategory } from './term-category';
 
 export type TableColumns = { sourceColumn: number; targetColumn: number; headerRow: number };
 const headerKey = (value: string) => value.normalize('NFKC').replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-const sourceHeaders = /^(?:原词|原文|源词|源文|中文(?:术语|词条)?|chinese(?: term)?|zh-cn|source(?: term| text)?|term)$/i;
-const targetHeaders = /^(?:译文|译法|翻译|目标词|英文(?:首选译法|译法|术语)?|英语|english(?: term)?|en-us|en-gb|target(?: term| text)?|translation)$/i;
+const sourceHeaders = /^(?:原词|原文|源词|源文|中文(?:术语|词条|姓名)?|姓名|chinese(?: term| name)?|zh-cn|source(?: term| text)?|term)$/i;
+const targetHeaders = /^(?:译文|译法|翻译|目标词|英文(?:首选译法|译法|术语|姓名)?|英语|english(?: term| name)?|en-us|en-gb|target(?: term| text)?|translation)$/i;
 export function detectTableColumns(segment: ParsedSegment): TableColumns | undefined {
   for (const [headerRow, row] of (segment.rows ?? []).slice(0, 10).entries()) {
     const keys = row.map(headerKey);
@@ -32,7 +33,8 @@ export function importTable(segments: ParsedSegment[], sourceColumn: number, tar
   const seen = new Set<string>();
   for (const segment of segments) {
     if (nonTermSheet(segment.label)) { warnings.push(`${segment.label}：说明或错误译法工作表不作为术语导入`); continue; }
-    const detected = automatic ? detectTableColumns(segment) : undefined;
+    const header = detectTableColumns(segment);
+    const detected = automatic ? header : undefined;
     const sourceIndex = detected?.sourceColumn ?? sourceColumn, targetIndex = detected?.targetColumn ?? targetColumn;
     if (sourceIndex === targetIndex) { warnings.push(`${segment.label}：原词和译文列不能相同`); continue; }
     const rows = segment.rows ?? [];
@@ -52,11 +54,9 @@ export function importTable(segments: ParsedSegment[], sourceColumn: number, tar
       seen.add(key);
       const ambiguous = /[/／]/.test(actualSource + target);
       if (ambiguous) warnings.push(`${segment.label} 第 ${index + 1} 行含斜杠别称，请拆成完整词组后确认指定翻译`);
-      const context = segment.label + ' ' + row.filter((_, i) => i !== sourceIndex && i !== targetIndex).join(' ');
-      const category = /人名|嘉宾姓名|\bperson\b|\bnames\b/i.test(context) ? 'person'
-        : /地名|\bplaces\b/i.test(context) || /^(重庆|长寿|大渡口|福州|巴西|巴林|卡皮瓦里|Chongqing|Changshou|Dadukou|Fuzhou|Brazil|Bahrain|Capivari)$/i.test(actualSource) || /开发区|\b(?:Province|City|Industrial Development Zone)\b/i.test(actualSource + target) ? 'place'
-        : /公司|集团|联盟|大学|研究院|corporation|company|university|alliance/i.test(actualSource + target) ? 'company'
-        : /^[A-Z][A-Z0-9+]{1,12}$/.test(actualSource) ? 'product' : 'industry';
+      const context = [segment.label, ...row.filter((_, i) => i !== sourceIndex && i !== targetIndex), ...(header ? [rows[header.headerRow][sourceIndex] ?? '', rows[header.headerRow][targetIndex] ?? ''] : [])];
+      const neighbors = rows.slice(Math.max(0, index - 2), index + 3).filter(neighbor => neighbor !== row).map(neighbor => ({ source: neighbor[sourceIndex] ?? '', target: neighbor[targetIndex] ?? '' }));
+      const category = inferTermCategory({ source: actualSource, target, context, neighbors });
       candidates.push({ id: `table-${segment.id}-${index}`, source: actualSource, target: source ? target : '', category,
         priority: 70, basis: 'source', evidence: row.filter(Boolean).join(' | ').slice(0, 400),
         location: `${segment.label} · 第 ${index + 1} 行`, hot: true, translation: Boolean(source && target && !ambiguous), pinned: false });
