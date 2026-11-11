@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { ArrowDown, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, Copy, Download, FileCheck2, FileText, FolderOpen, Globe2, KeyRound, Layers3, LoaderCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, Download, Ellipsis, FileCheck2, FileText, FolderOpen, Globe2, Layers3, LoaderCircle, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api';
 import { CandidateSchema, categoryNames, type Candidate, type Category, type ExtractionResult, type Job, type ParsedFile } from '../shared/schema';
 import { compileHotwords, compileTranslations, fileText, validateExport, type Compiled } from '../shared/compiler';
 import { importTable } from '../shared/table-import';
-import { AnimatedNumber, ConfirmDialog, Disclosure, PrioritySlider, Segmented, Switch, Tip, Toggle, spring } from './components/ui';
+import { AnimatedNumber, ConfirmDialog, Disclosure, OverlayPanel, PrioritySlider, Segmented, Switch, Tip, Toggle, spring } from './components/ui';
 import { ModelPanel } from './components/ModelSettings';
 import { providerNames, type ModelSelection, type ModelSettings } from '../shared/models';
 
@@ -50,21 +50,29 @@ export default function App() {
   const [stage, setStage] = useState<Stage>(1), [reviewReady, setReviewReady] = useState(false);
   const [dragging, setDragging] = useState(false), [sourceOpen, setSourceOpen] = useState(false), [warningsOpen, setWarningsOpen] = useState(false);
   const [toast, setToast] = useState<Toast>();
+  const [historyOpen, setHistoryOpen] = useState(false), [helpOpen, setHelpOpen] = useState(false);
+  const [historyError, setHistoryError] = useState(''), [historyLoading, setHistoryLoading] = useState(false);
+  const [rangeOpen, setRangeOpen] = useState(false), [processing, setProcessing] = useState('ai');
+  const [editingTerm, setEditingTerm] = useState<string>();
   const [pendingDelete, setPendingDelete] = useState<Job>(), [deleting, setDeleting] = useState(false);
   const input = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
   const parseWorker = useRef<Worker | null>(null);
-  const sections = { 1: useRef<HTMLElement>(null), 2: useRef<HTMLElement>(null), 3: useRef<HTMLElement>(null) };
+  const stageFocus = useRef<HTMLHeadingElement>(null);
   const deleteTrigger = useRef<HTMLButtonElement | null>(null);
   const reduced = useReducedMotion();
   const segments = useMemo(() => parsed?.segments.filter(s => selected.includes(s.id)) ?? [], [parsed, selected]);
   const chars = segments.reduce((n, s) => n + s.text.length, 0);
-  const tableMode = segments.some(s => s.rows);
-  const columns = Math.max(2, ...segments.flatMap(s => s.rows?.slice(0, 10).map(r => r.length) ?? []));
+  const tableMode = !!parsed?.segments.some(s => s.rows);
+  const directMode = processing === 'table' && tableMode;
+  const columns = Math.max(2, ...(parsed?.segments ?? []).flatMap(s => s.rows?.slice(0, 10).map(r => r.length) ?? []));
   const hot = useMemo(() => compileHotwords(candidates), [candidates]);
   const translations = useMemo(() => compileTranslations(candidates, bidirectional), [candidates, bidirectional]);
   const excluded = [...hot.excluded, ...translations.excluded];
   const excludedIds = new Set(excluded.map(e => e.id));
-  const needsReview = (c: Candidate) => c.basis === 'suggested' || /[/／]/.test(c.source + c.target);
+  const needsReview = (c: Candidate) => (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target);
+  const edited = candidates.find(c => c.id === editingTerm);
+  const pendingCount = candidates.filter(c => c.target.trim() && !c.translation && c.hot).length;
+  const selectedModel = selection?.mode === 'team' ? modelSettings?.services.find(s => s.id === selection.serviceId)?.name : modelSettings?.credentials.find(c => c.id === selection?.credentialId)?.name;
   const visible = candidates.filter(c => (!query || `${c.source} ${c.target} ${c.location}`.toLowerCase().includes(query.toLowerCase()))
     && (category === 'all' || c.category === category)
     && (view === 'all' || (view === 'review' ? needsReview(c) : excludedIds.has(c.id))));
@@ -80,11 +88,26 @@ export default function App() {
   }, [toast]);
   function notify(message: string, action?: () => void) { setToast({ id: Date.now(), message, action }); }
   function resetFilters() { setQuery(''); setCategory('all'); setView('all'); setPage(0); }
-  function goTo(next: Stage) { setStage(next); sections[next].current?.scrollIntoView({ behavior: reduced ? 'instant' : 'smooth', block: 'start' }); }
+  function goTo(next: Stage) { setStage(next); setEditingTerm(undefined); }
+  useEffect(() => {
+    if (stage === 1 && !reviewReady && !parsed) return;
+    const timer = window.setTimeout(() => {
+      stageFocus.current?.focus({ preventScroll: true });
+      const workflow = document.getElementById('workflow');
+      const top = workflow?.getBoundingClientRect().top;
+      if (top !== undefined && (top < 16 || top > window.innerHeight * .65)) workflow?.scrollIntoView({ behavior: reduced ? 'instant' : 'smooth', block: 'start' });
+    }, reduced ? 0 : 220);
+    return () => window.clearTimeout(timer);
+  }, [stage, reduced]);
   function ready(terms: Candidate[], nextWarnings: string[]) {
     setCandidates(terms); setWarnings(nextWarnings); setReviewReady(true); setStage(2); setExample(false); setToast(undefined); resetFilters();
   }
-  async function refreshJobs() { setJobs(await api<Job[]>('/api/jobs')); }
+  async function refreshJobs() {
+    setHistoryLoading(true); setHistoryError('');
+    try { setJobs(await api<Job[]>('/api/jobs')); }
+    catch (e) { setHistoryError((e as Error).message); throw e; }
+    finally { setHistoryLoading(false); }
+  }
   async function refreshModels() {
     setModelsLoading(true); setModelsError('');
     try {
@@ -97,7 +120,7 @@ export default function App() {
   useEffect(() => {
     api<User>('/api/me').then(setUser).catch(e => setError(e.message));
     refreshJobs().catch(() => {});
-    refreshModels().catch(e => setError(e.message));
+    refreshModels().catch(() => {});
     return () => { parseWorker.current?.terminate(); };
   }, []);
   useEffect(() => {
@@ -124,6 +147,7 @@ export default function App() {
       if (!event.data.ok || !event.data.file) { setError(event.data.error || '读取失败'); return; }
       const result = event.data.file;
       setParsed(result); setSelected(result.segments.filter(s => s.text.trim()).map(s => s.id));
+      setProcessing(result.segments.some(s => s.rows) ? 'table' : 'ai'); setRangeOpen(false);
       setName(file.name.replace(/\.[^.]+$/, '').slice(0, 100)); setWarnings(result.warnings);
       setCandidates([]); setActiveJob(undefined); setExample(false); setReviewReady(false); setSourceOpen(false); resetFilters();
       notify(`已读取 ${result.segments.length} 项内容`);
@@ -149,6 +173,7 @@ export default function App() {
   }
   async function openJob(job: Job) {
     if (busy || running) return;
+    setHistoryOpen(false);
     setName(job.name); setActiveJob(job); setError(''); setParsed(undefined); setSelected([]); setCandidates([]); setReviewReady(false); setWarnings([]); setExample(false); setStage(1); setToast(undefined);
     if (job.status === 'failed') setError(job.error || '任务失败，请重新上传资料后重试');
     if (job.status === 'completed') {
@@ -190,7 +215,7 @@ export default function App() {
     try {
       if (file.size > 5_000_000) throw new Error('审核项目文件过大');
       const result = JSON.parse(await file.text());
-      if (result.version !== 1 || !Array.isArray(result.candidates) || result.candidates.length > 20000 || typeof result.name !== 'string') throw new Error('不是有效的词准项目');
+      if (result.version !== 1 || !Array.isArray(result.candidates) || result.candidates.length > 20000 || typeof result.name !== 'string') throw new Error('不是有效的 HotWord 审核项目');
       const terms = result.candidates.map((c: unknown) => CandidateSchema.parse(c));
       if (new Set(terms.map((c: Candidate) => c.id)).size !== terms.length) throw new Error('项目内存在重复词条 ID');
       ready(terms, []); setName(result.name.slice(0, 100)); setParsed(undefined); setSelected([]); setActiveJob(undefined); setError(''); notify('审核项目已恢复');
@@ -198,99 +223,93 @@ export default function App() {
   }
   function showExample() { ready(demo, []); setName('格式示例'); setParsed(undefined); setSelected([]); setActiveJob(undefined); setExample(true); setError(''); }
 
-  return <MotionConfig reducedMotion="user" transition={reduced ? { duration: 0 } : spring}><Tooltip.Provider delayDuration={450}><div className="layout">
-    <aside className="sidebar">
-      <a className="brand" href="#workspace" aria-label="HotWord 工作台"><span className="brand-mark"><Layers3 size={21}/></span><strong>HotWord<span>会议术语工作台</span></strong></a>
-      <div className="workspace-label">WORKSPACE <span>团队版</span></div>
-      <button className="nav-item active" onClick={() => document.getElementById('workspace')?.scrollIntoView({ behavior: reduced ? 'instant' : 'smooth' })}><Layers3 size={17}/>术语工作台<span className="nav-dot"/></button>
-      <button className="nav-item" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={17}/>导入审核项目<span className="nav-shortcut">JSON</span></button>
-      <button className="nav-item" onClick={() => setModelOpen(true)}><KeyRound size={17}/>模型与密钥</button>
-      <div className="history-heading">我的近期任务<Tip text="刷新云端任务"><button className="icon-button" aria-label="刷新任务" onClick={() => refreshJobs().catch(e => setError(e.message))}><RefreshCw size={14}/></button></Tip></div>
-      <div className="history">{jobs.length ? jobs.map(job => <div className={`job ${activeJob?.id === job.id ? 'selected' : ''}`} key={job.id}>
-        <button className="job-main" disabled={busy || running} onClick={() => openJob(job)}><FileText size={16}/><span><b>{job.name}</b><small><i className={`status-dot ${job.status}`}/>{statusNames[job.status]} · {job.mode === 'personal' ? '个人' : '团队'}</small><small title={job.model}>{job.model || 'Workers AI'} · {new Date(job.created_at).toLocaleDateString('zh-CN')}</small></span></button>
-        <Tip text="删除云端任务"><button className="icon-button job-delete" aria-label={`删除任务 ${job.name}`} disabled={busy || running} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(job); }}><Trash2 size={14}/></button></Tip>
-      </div>) : <div className="history-empty"><span className="empty-stack"><FileText size={18}/></span><p>下一场会议，从这里开始</p><small>AI 任务保留 7 天<br/>原表导入在当前浏览器完成</small></div>}</div>
-      <div className="sidebar-note"><span className="note-dot"/><p>词条完整，译法准确。<br/><b>让每一场对话更顺畅。</b></p></div>
-      <div className="sidebar-bottom"><span className="avatar">{user?.email?.[0]?.toUpperCase() || 'H'}</span><div><b>{user?.local ? '本地开发模式' : user?.role === 'admin' ? '团队管理员空间' : '团队成员空间'}</b><span>{user?.email ?? '正在验证登录…'}</span></div><ShieldCheck size={16}/></div>
-    </aside>
-    <main id="workspace">
-      <header className="topbar"><span className="breadcrumb">工作台 <ChevronRight size={13}/> <b>{name || '新建词库'}</b></span><div className="top-actions"><span className="language-label"><Globe2 size={14}/> 中英双语</span><button className="button compact secondary" disabled={!reviewReady} onClick={saveProject}><Download size={14}/>保存项目</button></div></header>
-      <div className="main-body">
-        <div className="intro"><div><div className="eyebrow"><span/>BUILT FOR BETTER CONVERSATIONS</div><h1>好翻译，<br className="mobile-break"/>从<span className="headline-word">准确的词</span>开始。</h1><p>把会议资料整理成热词与指定翻译，<br className="mobile-break"/>从上传到导出，每一步都清晰可控。</p></div><button className="text-button example-button" disabled={busy || running} onClick={showExample}><span className="play-dot"><ArrowRight size={13}/></span>试试格式示例</button></div>
-        <div className="flow-bar"><div className="steps" role="group" aria-label="工作流程">{([{ n: 1, label: '准备资料', detail: 'Upload' }, { n: 2, label: '审核词条', detail: 'Review' }, { n: 3, label: '导出词库', detail: 'Export' }] as const).map(step => <button key={step.n} className={`step ${stage === step.n ? 'current' : ''} ${stage > step.n ? 'complete' : ''}`} aria-current={stage === step.n ? 'step' : undefined} disabled={step.n !== 1 && !reviewReady} onClick={() => goTo(step.n)}>
-          {stage === step.n && <motion.span layoutId="flow-indicator" className={`step-indicator stage-${stage}`}/>}<span className="step-number">{stage > step.n ? <Check size={13}/> : `0${step.n}`}</span><span className="step-label">{step.label}<small>{step.detail}</small></span>
-        </button>)}</div><span className="flow-caption">完整词条 · 精准映射</span></div>
-        <AnimatePresence initial={false}>{error && <motion.div className="alert error" role="alert" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}><span>{error}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setError('')}><X size={16}/></button></motion.div>}</AnimatePresence>
-        {example && <div className="alert example-alert"><Sparkles size={16}/><span>正在体验格式示例。正式词库请使用实际会议资料。</span><button className="text-button" onClick={() => goTo(2)}>查看词条<ArrowDown size={14}/></button></div>}
-        <section className="upload-section panel" ref={sections[1]}>
-          <SectionTitle number="01" title="准备会议资料" detail="一次上传，开始整理" right={<span className="subtle-tag">单文件 ≤ 20 MB</span>}/>
-          <div className="upload-grid">
-            <button className={`dropzone ${dragging ? 'dragging' : ''} ${busy ? 'loading' : ''} ${parsed ? 'has-file' : ''}`} disabled={busy || running} onClick={() => input.current?.click()}
-              onDragOver={e => { e.preventDefault(); if (!busy && !running) setDragging(true); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
-              onDrop={e => { e.preventDefault(); setDragging(false); if (!busy && !running && e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); }}>
-              <motion.div className="upload-art" animate={{ rotate: dragging ? -5 : 0, y: dragging ? -6 : 0 }}><span className="sheet sheet-back"/><span className="sheet sheet-mid"/><span className="sheet sheet-front">{busy ? <LoaderCircle size={25} className="spin"/> : parsed ? <FileCheck2 size={25}/> : <UploadCloud size={25}/>}<i/><i/></span>{parsed && <span className="file-ready"><Check size={11}/></span>}</motion.div>
-              <strong>{busy ? '正在读取资料…' : dragging ? '松开，交给 HotWord' : parsed ? parsed.name : '拖入文件，或点击上传'}</strong><span>{parsed ? '点击更换会议资料' : 'PDF · Excel · Word · TXT · CSV'}</span><small>{parsed ? `${parsed.segments.length} 项内容已读取` : '读取后可选择页码与工作表'}</small>
-            </button>
-            <div className="upload-options"><label className="field-label" htmlFor="project-name">项目名称<span>方便下次找到它</span></label><input id="project-name" maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="例如：国际复材 2026 年会议"/>
-              <div className="rule-note"><ShieldCheck size={16}/><p>原文件在浏览器中读取。AI 仅提取所选内容；已有双语表，可直接导入。</p></div><FormatPlayground/>
-            </div>
-          </div>
-          <ModelPanel settings={modelSettings} loading={modelsLoading} loadError={modelsError} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>
-          {parsed && <div className="source-options">
-            <div className="selection-heading"><div><b>选择参与提取的内容</b><span>{selected.length} 项 · <AnimatedNumber value={chars}/> 字符</span></div><button className="text-button" disabled={running} onClick={() => setSelected(selected.length ? [] : parsed.segments.filter(s => s.text.trim()).map(s => s.id))}>{selected.length ? '取消全选' : '全选'}</button></div>
-            <div className="segment-list">{parsed.segments.map(segment => <label key={segment.id} className={selected.includes(segment.id) ? 'selected' : ''}><input type="checkbox" disabled={!segment.text.trim() || running} checked={selected.includes(segment.id)} onChange={e => setSelected(s => e.target.checked ? [...s, segment.id] : s.filter(id => id !== segment.id))}/><span>{segment.label}</span><small>{segment.text.length.toLocaleString()} 字</small></label>)}</div>
-            <Disclosure title="查看所选原文" open={sourceOpen} onToggle={() => setSourceOpen(!sourceOpen)}><pre className="source-preview">{segments.map(s => `[${s.label}]\n${s.text}`).join('\n\n')}</pre></Disclosure>
-            {tableMode && <div className="table-options"><div className="table-options-heading"><Layers3 size={17}/><strong>已有双语对照表</strong><span>沿用原表译法</span></div><div className="table-controls">
-              <label>原词列<select value={sourceColumn} onChange={e => setSourceColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><ArrowRight size={14}/>
-              <label>译文列<select value={targetColumn} onChange={e => setTargetColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label>
-              <Switch checked={skipHeader} onChange={setSkipHeader} label="跳过每表首行" disabled={running}/><button className="button primary" disabled={!segments.length || running} onClick={directImport}>按原表导入<ArrowRight size={15}/></button>
-            </div><div className="table-sample">{segments.filter(s => s.rows).slice(0, 1).map(s => <div key={s.id}><small>前两行预览</small>{s.rows!.slice(0, 2).map((r, i) => <code key={i}>{r[sourceColumn] || '（空）'}<ArrowRight size={12}/>{r[targetColumn] || '（空）'}</code>)}</div>)}</div></div>}
-            <div className="extract-action"><p>{chars > 120000 ? '超过 120000 字符，请减少页面 / 工作表或分批处理。' : '从资料中识别人名、地名、专名与关键行业术语。'}</p><button className="button primary" disabled={!user || !modelReady || busy || running || !name.trim() || !chars || chars > 120000} onClick={extract}><Sparkles size={16}/>{activeJob?.status === 'failed' ? '重新提取候选词' : 'AI 提取候选词'}<ArrowRight size={15}/></button></div>
-          </div>}
-        </section>
-        {activeJob && <div className="task-model-note"><b>{activeJob.mode === 'personal' ? '个人服务' : '团队服务'} · {providerNames[activeJob.provider]} · {activeJob.model || 'Workers AI'}</b><span>{activeJob.input_tokens.toLocaleString()} 输入 / {activeJob.output_tokens.toLocaleString()} 输出 Token{activeJob.usage_estimated ? '（含估计用量）' : ''}{activeJob.estimated_usd === null ? '' : ` · 预估 $${activeJob.estimated_usd.toFixed(4)}`}</span>{activeJob.status === 'failed' && <button className="text-button" onClick={() => setModelOpen(true)}>重新配置 / 手动切换服务</button>}</div>}
-        {running && <div className="progress-panel panel" role="status"><span className="progress-icon"><LoaderCircle size={22} className="spin"/></span><div><b>{statusNames[activeJob!.status]} · {activeJob!.name}</b><p>已完成 {activeJob!.progress} / {activeJob!.total || '…'} 个片段。可稍后从近期任务恢复。</p><progress value={activeJob!.progress} max={activeJob!.total || 1}/></div><button className="button secondary" disabled={deleting} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(activeJob); }}>取消任务</button></div>}
-        {warnings.length > 0 && <Disclosure className="warnings" title={`${warnings.length} 条读取 / 审核提示`} open={warningsOpen} onToggle={() => setWarningsOpen(!warningsOpen)}><ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></Disclosure>}
-        {reviewReady && <>
-          <section className="review-section panel" ref={sections[2]}>
-            <SectionTitle number="02" title="审核与精简词条" detail="每一个译法，由你确认" right={<button className="button compact secondary" onClick={() => { setCandidates(c => [...c, { id: crypto.randomUUID(), source: '新词条', target: '', category: 'other', priority: 80, basis: 'manual', evidence: '', location: '手动添加', hot: true, translation: false, pinned: false }]); resetFilters(); setPage(Math.floor(candidates.length / 30)); }}><Plus size={15}/>添加词条</button>}/>
-            <div className="review-summary"><div className="term-total"><strong><AnimatedNumber value={candidates.length}/></strong><span>候选词条</span></div><div className="mini-budget"><span><i/>热词清单</span><b><AnimatedNumber value={hot.chars}/><small> / 2,048</small></b></div><div className="mini-budget translation"><span><i/>指定翻译</span><b><AnimatedNumber value={translations.chars}/><small> / 20,480</small></b></div><button className="text-button" onClick={() => goTo(3)}>查看导出<ArrowDown size={14}/></button></div>
-            <p className="review-description">勾选指定翻译即确认译法。拖动重要度调整取舍，勾选必保优先保留。人名、地名与机构优先纳入。</p>
-            <div className="toolbar"><div className="search-field"><Search size={16}/><input aria-label="搜索词条" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索原词、译文或出处"/>{query && <button className="icon-button" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13}/></button>}</div>
-              <select aria-label="词条类别筛选" value={category} onChange={e => setCategory(e.target.value)}><option value="all">全部类别</option>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-              <Segmented value={view} options={[{ value: 'all', label: '全部', count: candidates.length }, { value: 'review', label: '待审核', count: candidates.filter(needsReview).length }, { value: 'excluded', label: '未纳入', count: excludedIds.size }]} onChange={v => setView(v as typeof view)} label="审核视图"/>
-            </div>
-            <div className="table-scroll"><table><thead><tr><th className="check-column">热词</th><th className="check-column">指定翻译</th><th>原词</th><th>译文</th><th>类别</th><th>重要度</th><th className="check-column">必保</th><th>依据 / 出处</th><th><span className="sr-only">操作</span></th></tr></thead><tbody>{visible.slice(page * 30, page * 30 + 30).map(c => <tr key={c.id} className={excludedIds.has(c.id) ? 'excluded-row' : ''}>
-              <td className="check-column"><Toggle label={`热词 ${c.source}`} checked={c.hot} onChange={v => update(c.id, { hot: v })}/></td>
-              <td className="check-column"><Toggle label={`指定翻译 ${c.source}`} checked={c.translation} disabled={!c.target.trim()} onChange={v => update(c.id, { translation: v })}/></td>
-              <td><input className="cell-input" aria-label={`原词 ${c.source}`} maxLength={180} value={c.source} onChange={e => update(c.id, { source: e.target.value, basis: 'manual' })}/></td>
-              <td><input className="cell-input target-input" aria-label={`译文 ${c.source}`} maxLength={180} value={c.target} onChange={e => update(c.id, { target: e.target.value, basis: 'manual', translation: false })} placeholder="未确认译名，留空"/>{c.basis === 'suggested' && <span className="suggestion-tag">AI 建议 · 待确认</span>}</td>
-              <td><select aria-label={`类别 ${c.source}`} value={c.category} onChange={e => update(c.id, { category: e.target.value as Category })}>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></td>
-              <td><PrioritySlider label={`重要度 ${c.source}`} value={c.priority} onChange={v => update(c.id, { priority: v })}/></td>
-              <td className="check-column"><Toggle label={`必保 ${c.source}`} checked={c.pinned} pinned onChange={v => update(c.id, { pinned: v })}/></td>
-              <td className="evidence"><details><summary>{c.location || '手动'}{c.basis === 'source' && <Check size={12}/>}</summary><p>{c.evidence || '手动录入'}</p></details>{excluded.filter(e => e.id === c.id).map((e, i) => <small key={i}>{e.reason}</small>)}</td>
-              <td><Tip text="移除词条，可撤销"><button className="icon-button row-delete" aria-label={`删除词条 ${c.source}`} onClick={() => removeTerm(c)}><X size={14}/></button></Tip></td>
-            </tr>)}</tbody></table>{!visible.length && <div className="no-results"><Search size={22}/><b>{candidates.length ? '没有匹配的词条' : '词库还是空的'}</b><p>{candidates.length ? '试试其他关键词，或切换审核视图。' : '可以添加词条，或重新导入资料。'}</p>{candidates.length > 0 && <button className="text-button" onClick={resetFilters}>重置筛选<RefreshCw size={13}/></button>}</div>}</div>
-            <div className="review-footer"><span>{visible.length} 条结果<span className="footer-divider">·</span>按完整条目取舍，保留原文依据</span><div className="pagination"><button className="icon-button" aria-label="上一页" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft size={16}/></button><span>{pages ? page + 1 : 0} / {pages}</span><button className="icon-button" aria-label="下一页" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)}><ChevronRight size={16}/></button></div></div>
-          </section>
-          <section className="export-section" ref={sections[3]}><SectionTitle number="03" title="带走你的会议词库" detail="两份 TXT，已按导入规则整理" right={<Switch checked={bidirectional} onChange={setBidirectional} label="生成双向映射"/>}/>
-            <div className="export-grid"><ExportCard kind="hot" title="热词清单" description="中英文完整词条 · 中文逗号分隔" compiled={hot} limit={2048} onDownload={() => exportTxt('hot', hot)} onCopy={() => exportTxt('hot', hot, true)}/><ExportCard kind="translation" title="指定翻译" description="原词-译文 · 中文逗号分隔完整映射" compiled={translations} limit={20480} onDownload={() => exportTxt('translation', translations)} onCopy={() => exportTxt('translation', translations, true)}/></div>
-            <div className="save-review"><p><ShieldCheck size={14}/>字符数包含 BOM 与 Windows 换行；超限时按完整条目取舍。</p><button className="text-button" onClick={saveProject}>保存审核项目<ArrowRight size={14}/></button></div>
-          </section>
-        </>}
-        {!reviewReady && !parsed && <div className="getting-started"><div><span className="feature-icon peach"><FileText size={17}/></span><h3>词组，完整保留</h3><p>英文短语不拆词，中文词组不拆字。</p></div><div><span className="feature-icon lilac"><ShieldCheck size={17}/></span><h3>格式与字数，刚刚好</h3><p>热词 2,048 · 指定翻译 20,480 字符。</p></div><div><span className="feature-icon mint"><Sparkles size={17}/></span><h3>聚焦容易译错的词</h3><p>人名、地名、专名与重要行业术语。</p></div></div>}
-        <footer><span>HotWord<span className="footer-divider">/</span>每一个词，都值得准确。</span><span>为下一场好对话做好准备<ArrowRight size={12}/></span></footer>
-      </div>
-    </main>
-    <input ref={input} hidden type="file" accept=".pdf,.xlsx,.docx,.txt,.csv" onChange={e => { if (e.target.files?.[0]) readFile(e.target.files[0]); e.target.value = ''; }}/>
-    <input ref={projectInput} hidden type="file" accept=".json" onChange={e => { if (e.target.files?.[0]) importProject(e.target.files[0]); e.target.value = ''; }}/>
-    <ConfirmDialog open={!!pendingDelete} onClose={() => setPendingDelete(undefined)} onConfirm={deleteJob} busy={deleting} title="删除这个云端任务？" returnFocus={() => deleteTrigger.current?.isConnected ? deleteTrigger.current.focus() : document.querySelector<HTMLButtonElement>('[aria-label="刷新任务"]')?.focus()}>{pendingDelete?.name} 的任务记录及云端文件将被删除。已下载到本地的文件仍可使用。</ConfirmDialog>
-    <AnimatePresence>{toast && <motion.div key={toast.id} className="toast" role="status" initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: 0.96 }}><span className="toast-check"><Check size={14}/></span><span>{toast.message}</span>{toast.action && <button onClick={toast.action}>撤销</button>}<button className="toast-close" aria-label="关闭操作提示" onClick={() => setToast(undefined)}><X size={14}/></button></motion.div>}</AnimatePresence>
-  </div></Tooltip.Provider></MotionConfig>;
+  return <MotionConfig reducedMotion="user" transition={reduced ? { duration: 0 } : spring}><Tooltip.Provider delayDuration={350}>
+    <div className={`layout stage-${stage}`}>
+      <header className="app-header">
+        <a className="brand" href="#workspace" onClick={() => goTo(1)} aria-label="HotWord 工作台"><span className="brand-mark"><Layers3 size={21}/></span><strong>HotWord<span>让对话，少一点误解。</span></strong></a>
+        <nav className="header-nav" aria-label="工作台导航"><span className="header-current">会议词库</span><button onClick={() => setHistoryOpen(true)}><Clock3 size={15}/>近期任务{jobs.length > 0 && <small>{jobs.length}</small>}</button></nav>
+        <div className="header-actions"><Tip text="继续编辑已保存的 JSON 项目"><button className="icon-button" aria-label="导入审核项目" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={18}/></button></Tip><Tip text="模型与密钥"><button className="icon-button" aria-label="模型与密钥" onClick={() => setModelOpen(true)}><Settings2 size={18}/></button></Tip><Tip text="使用指南"><button className="icon-button" aria-label="使用指南" onClick={() => setHelpOpen(true)}><CircleHelp size={18}/></button></Tip><span className="header-divider"/><Tip text={user?.email || '正在验证登录'}><span className="avatar" aria-label={user?.local ? '本地开发模式' : '团队成员'}>{user?.email?.[0]?.toUpperCase() || 'H'}</span></Tip></div>
+      </header>
+      <main id="workspace">
+        {stage === 1 && <div className={`intro ${parsed || reviewReady || running ? 'intro-compact' : ''}`}>
+          <div className="eyebrow"><span/>A LITTLE PREPARATION. A BETTER CONVERSATION.</div>
+          <h1>好翻译，从<span className="headline-word">准确的词</span>开始。</h1>
+          <p>上传会议资料，整理专属词库。三步，轻松带走。</p>
+        </div>}
+        <div id="workflow" className="flow-bar"><nav className="steps" aria-label="工作流程">{([{ n: 1, label: '准备资料', icon: UploadCloud }, { n: 2, label: '核对词条', icon: FileCheck2 }, { n: 3, label: '下载词库', icon: Download }] as const).map(step => <button key={step.n} className={`step ${stage === step.n ? 'current' : ''}`} aria-current={stage === step.n ? 'step' : undefined} disabled={step.n !== 1 && (!reviewReady || busy || running)} onClick={() => goTo(step.n)}>
+          {stage === step.n && <motion.span layoutId="flow-indicator" className={`step-indicator tone-${stage}`}/>}<span className="step-number">{reviewReady && step.n === 1 ? <Check size={12}/> : `0${step.n}`}</span><span>{step.label}</span>{stage === step.n && <step.icon size={14} className="step-icon"/>}
+        </button>)}</nav></div>
+        <div className="main-body">
+          <AnimatePresence initial={false}>{error && <motion.div className="alert error" role="alert" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><span>{error}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setError('')}><X size={16}/></button></motion.div>}</AnimatePresence>
+          {example && <div className="example-alert"><span className="example-dot"/>示例体验 · 这些词条仅用于演示<button className="text-button" onClick={() => { goTo(1); input.current?.click(); }}>上传自己的资料<ArrowRight size={13}/></button></div>}
+          <AnimatePresence mode="wait" initial={false}><motion.div key={stage} className="stage-content" initial={{ opacity: 0, y: reduced ? 0 : 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : -6 }} transition={{ duration: reduced ? 0 : .18, ease: 'easeOut' }}>
+            {stage === 1 && <section className={`upload-section panel ${parsed ? 'file-loaded' : ''}`} aria-label="准备资料">
+              {!parsed && !running && <>
+                <div className="upload-heading"><span className="small-kicker">从一份资料开始</span><h2 ref={stageFocus} tabIndex={-1}>把会议资料，放在这里。</h2><p>已有双语表直接导入，其他资料交给 AI 整理。</p></div>
+                <button className={`dropzone ${dragging ? 'dragging' : ''} ${busy ? 'loading' : ''}`} aria-label="上传会议资料" disabled={busy || running} onClick={() => input.current?.click()}
+                  onDragOver={e => { e.preventDefault(); if (!busy && !running) setDragging(true); }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
+                  onDrop={e => { e.preventDefault(); setDragging(false); if (!busy && !running && e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); }}>
+                  <motion.div className="upload-art" animate={{ rotate: dragging ? -4 : 0, y: dragging ? -8 : 0 }} aria-hidden="true"><span className="art-orbit"/><span className="sheet sheet-back"><i/><i/><i/></span><span className="sheet sheet-mid"><b>Aa</b><i/><i/></span><span className="sheet sheet-front">{busy ? <LoaderCircle size={25} className="spin"/> : <UploadCloud size={25}/>}<i/><i/><small>YOUR NEXT CONVERSATION</small></span><span className="art-spark"><Sparkles size={14}/></span><span className="art-word">词<span>word</span></span></motion.div>
+                  <strong>{busy ? '正在读取，请稍等片刻…' : dragging ? '松开，开始整理' : '拖入文件，或点击选择'}</strong><span>{busy ? '正在读取文档中的文字内容' : 'PDF、Excel、Word、TXT 或 CSV · 最大 20 MB'}</span><span className="upload-cta">{busy ? '读取中' : '选择会议资料'}{!busy && <Plus size={16}/>}</span>
+                </button>
+                <div className="upload-bottom"><span><ShieldCheck size={13}/>原文件在浏览器中读取</span><button className="text-button" onClick={() => setHelpOpen(true)}>支持哪些资料？<ArrowRight size={12}/></button></div>
+              </>}
+              {parsed && !running && <>
+                <div className="section-title"><div><span className="small-kicker">资料已就绪</span><h2 ref={stageFocus} tabIndex={-1}>接下来，选择整理方式。</h2></div><span className="ready-badge"><Check size={12}/>已读取</span></div>
+                <div className="uploaded-file"><span className="uploaded-icon"><FileText size={23}/></span><div><strong>{parsed.name}</strong><small>{parsed.segments.length} 项内容 · {chars.toLocaleString()} 字已选</small></div><button className="text-button" disabled={busy || running} onClick={() => input.current?.click()}>更换资料<RefreshCw size={13}/></button></div>
+                <div className="project-name-field"><label htmlFor="project-name">词库名称</label><input id="project-name" maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="为这场会议起个名字"/></div>
+                <Disclosure className="range-options" title={<span>选择页码或工作表<small>{selected.length} / {parsed.segments.length} 项</small></span>} open={rangeOpen} onToggle={() => setRangeOpen(!rangeOpen)}>
+                  <div className="selection-heading"><span>仅处理勾选的内容</span><button className="text-button" onClick={() => setSelected(selected.length ? [] : parsed.segments.filter(s => s.text.trim()).map(s => s.id))}>{selected.length ? '取消全选' : '全选'}</button></div>
+                  <div className="segment-list">{parsed.segments.map(segment => <label key={segment.id} className={selected.includes(segment.id) ? 'selected' : ''}><input type="checkbox" disabled={!segment.text.trim() || running} checked={selected.includes(segment.id)} onChange={e => setSelected(s => e.target.checked ? [...s, segment.id] : s.filter(id => id !== segment.id))}/><span>{segment.label}</span><small>{segment.text.length.toLocaleString()} 字</small></label>)}</div>
+                  <Disclosure title="查看所选原文" open={sourceOpen} onToggle={() => setSourceOpen(!sourceOpen)}><pre className="source-preview">{segments.map(s => `[${s.label}]\n${s.text}`).join('\n\n')}</pre></Disclosure>
+                </Disclosure>
+                <div className="processing-area">{tableMode ? <Segmented value={processing} label="资料整理方式" options={[{ value: 'table', label: '沿用原表译法' }, { value: 'ai', label: 'AI 提取词条' }]} onChange={setProcessing}/> : <span className="processing-label"><Sparkles size={16}/>AI 提取词条</span>}
+                  {directMode ? <div className="table-options"><p>选择原词与译文所在列，保留表里的完整配对。</p><div className="table-controls"><label>原词列<select aria-label="原词列" value={sourceColumn} onChange={e => setSourceColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><ArrowRight size={16}/><label>译文列<select aria-label="译文列" value={targetColumn} onChange={e => setTargetColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><Switch checked={skipHeader} onChange={setSkipHeader} label="跳过首行"/></div><div className="table-sample">{segments.filter(s => s.rows).slice(0, 1).map(s => <div key={s.id}><small>前两行预览</small>{s.rows!.slice(0, 2).map((r, i) => <div className="sample-pair" key={i}><span>{r[sourceColumn] || '（空）'}</span><ArrowRight size={12}/><span>{r[targetColumn] || '（空）'}</span></div>)}</div>)}</div></div> : <div className="ai-choice"><p>识别人名、地名、机构和行业术语，生成候选译法。</p><button className={`model-summary ${!modelReady ? 'unready' : ''}`} onClick={() => setModelOpen(true)}><span className="model-summary-icon"><Sparkles size={15}/></span><span><b>{modelsLoading ? '正在读取 AI 配置…' : selectedModel || '选择 AI 服务'}</b><small>{modelsError ? '打开设置，重新读取配置' : modelReady ? '当前服务已就绪' : '设置完成后即可开始'}</small></span><Settings2 size={16}/></button></div>}
+                </div>
+                <div className="stage-actions"><span>{!chars ? '请先选择至少一项有文字的内容' : directMode ? '直接导入，无需调用 AI' : chars > 120000 ? '内容超过 120,000 字，请减少所选范围' : !name.trim() ? '请填写词库名称' : !user ? '正在验证登录状态' : !modelReady ? '请先选择可用的 AI 服务' : '提取完成后，进入人工核对'}{chars > 120000 && !directMode && <button className="text-button" onClick={() => setRangeOpen(true)}>选择范围</button>}</span><motion.button className="button primary" whileTap={{ scale: .98 }} disabled={busy || running || !chars || (!directMode && (!user || !modelReady || !name.trim() || chars > 120000))} onClick={directMode ? directImport : extract}>{busy ? <LoaderCircle className="spin" size={16}/> : directMode ? <FileCheck2 size={16}/> : <Sparkles size={16}/>}<span>{directMode ? '导入并核对' : '开始提取'}</span><ArrowRight size={16}/></motion.button></div>
+              </>}
+              {running && <div className="processing-state" role="status"><span className="processing-orb"><LoaderCircle size={30} className="spin"/></span><span className="small-kicker">正在为这场对话做准备</span><h2 ref={stageFocus} tabIndex={-1}>{statusNames[activeJob!.status]} · {activeJob!.name}</h2><p>已完成 {activeJob!.progress} / {activeJob!.total || '…'} 个片段</p><progress value={activeJob!.progress} max={activeJob!.total || 1}/><small>可以关闭页面，稍后从近期任务继续。</small><button className="text-button" disabled={deleting} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(activeJob); }}>取消任务</button></div>}
+            </section>}
+            {stage === 2 && reviewReady && <section className="review-section" aria-label="核对词条">
+              <div className="section-title"><div><span className="small-kicker">{name || '会议词库'}</span><h2 ref={stageFocus} tabIndex={-1}>核对一下，译法就统一了。</h2></div><button className="button compact secondary" onClick={() => { const id = crypto.randomUUID(); setCandidates(c => [...c, { id, source: '新词条', target: '', category: 'other', priority: 80, basis: 'manual', evidence: '', location: '手动添加', hot: true, translation: false, pinned: false }]); resetFilters(); setPage(Math.floor(candidates.length / 30)); setEditingTerm(id); }}><Plus size={15}/>添加词条</button></div>
+              <div className="review-summary"><span><b><AnimatedNumber value={candidates.length}/></b> 个词条</span><span><i className="status-dot completed"/><b>{candidates.filter(c => c.translation).length}</b> 个译法已确认</span><button className="budget-peek" onClick={() => goTo(3)}><span>热词 <b><AnimatedNumber value={hot.chars}/></b> / 2,048</span><ChevronRight size={13}/></button></div>
+              <div className="review-workspace panel"><div className="toolbar"><Segmented value={view} options={[{ value: 'all', label: '全部词条', count: candidates.length }, { value: 'review', label: '待审核', count: candidates.filter(needsReview).length }, { value: 'excluded', label: '未纳入', count: excludedIds.size }]} onChange={v => setView(v as typeof view)} label="审核视图"/><div className="search-field"><Search size={15}/><input aria-label="搜索词条" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索词条"/>{query && <button className="icon-button" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13}/></button>}</div><select aria-label="词条类别筛选" value={category} onChange={e => setCategory(e.target.value)}><option value="all">全部类别</option>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+                <div className="term-head" aria-hidden="true"><span>#</span><span>原词</span><span>译文</span><span>纳入词库</span><span/></div>
+                <div className="term-list">{visible.slice(page * 30, page * 30 + 30).map((c, i) => <div key={c.id} className={`term-row ${excludedIds.has(c.id) ? 'excluded-row' : ''}`}>
+                  <span className="term-index">{String(page * 30 + i + 1).padStart(2, '0')}</span><div className="term-source"><label className="mobile-cell-label" htmlFor={`source-${c.id}`}>原词</label><textarea rows={1} id={`source-${c.id}`} className="cell-input" aria-label={`原词 ${c.source}`} maxLength={180} value={c.source} onChange={e => update(c.id, { source: e.target.value, basis: 'manual' })}/><span className="category-chip">{categoryNames[c.category]}{c.pinned && <span className="pin-label"> · 必保</span>}</span></div>
+                  <div className="term-target"><label className="mobile-cell-label" htmlFor={`target-${c.id}`}>译文</label><textarea rows={1} id={`target-${c.id}`} className="cell-input target-input" aria-label={`译文 ${c.source}`} maxLength={180} value={c.target} onChange={e => update(c.id, { target: e.target.value, basis: 'manual', translation: false })} placeholder="填写译文"/><span className={`term-status ${c.translation ? 'confirmed' : ''}`}>{c.translation ? <><Check size={10}/>译法已确认</> : c.target.trim() ? '译法待确认' : '暂未填写译文'}</span></div>
+                  <div className="term-toggles"><Toggle label={`热词 ${c.source}`} text="热词" checked={c.hot} onChange={v => update(c.id, { hot: v })}/><Toggle label={`指定翻译 ${c.source}`} text="指定翻译" checked={c.translation} disabled={!c.target.trim()} onChange={v => update(c.id, { translation: v })}/></div>
+                  <Tip text="查看原文与高级选项"><button className="icon-button term-detail" aria-label={`词条详情 ${c.source}`} onClick={() => setEditingTerm(c.id)}><Ellipsis size={19}/></button></Tip>
+                </div>)}</div>
+                {!visible.length && <div className="no-results"><span className="empty-icon">{view === 'review' ? <Check size={23}/> : <Search size={23}/>}</span><b>{!candidates.length ? '从第一个词条开始' : view === 'review' && !query && category === 'all' ? '没有待审核的建议译法' : '没有匹配的词条'}</b><p>{!candidates.length ? '点击“添加词条”，或返回上传资料。' : '可以切换视图，继续检查其他词条。'}</p>{candidates.length > 0 && <button className="text-button" onClick={resetFilters}>查看全部词条<ArrowRight size={13}/></button>}</div>}
+                <div className="review-footer"><span>{visible.length} 条结果</span><div className="pagination"><button className="icon-button" aria-label="上一页" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft size={16}/></button><span>{pages ? page + 1 : 0} / {pages}</span><button className="icon-button" aria-label="下一页" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)}><ChevronRight size={16}/></button></div></div>
+              </div>
+              <div className="stage-actions floating-actions"><button className="text-button" onClick={() => goTo(1)}><ArrowLeft size={14}/>返回资料</button><span className="action-hint">{pendingCount ? `${pendingCount} 个译法待确认，确认后才会导出` : '勾选“指定翻译”，即可确认译法'}</span><motion.button className="button primary" disabled={!candidates.length} onClick={() => goTo(3)} whileTap={{ scale: .98 }}>预览并导出<ArrowRight size={16}/></motion.button></div>
+            </section>}
+            {stage === 3 && reviewReady && <section className="export-section" aria-label="下载词库"><div className="section-title"><div><span className="small-kicker">{name || '会议词库'}</span><h2 ref={stageFocus} tabIndex={-1}>{hot.errors.length || translations.errors.length ? '再调整一下，就可以带走。' : '你的会议词库，准备好了。'}</h2></div><Switch checked={bidirectional} onChange={setBidirectional} label="生成双向映射"/></div>
+              {pendingCount > 0 && <div className="export-notice"><CircleHelp size={15}/><span>{pendingCount} 个尚未确认的译法不会导出。</span><button className="text-button" onClick={() => goTo(2)}>返回核对<ArrowLeft size={12}/></button></div>}
+              <div className="export-grid"><ExportCard kind="hot" title="热词清单" description="帮助翻译工具准确识别专有名词" compiled={hot} limit={2048} onDownload={() => exportTxt('hot', hot)} onCopy={() => exportTxt('hot', hot, true)}/><ExportCard kind="translation" title="指定翻译" description="让同一个词，始终使用同一种译法" compiled={translations} limit={20480} onDownload={() => exportTxt('translation', translations)} onCopy={() => exportTxt('translation', translations, true)}/></div>
+              <div className="save-review"><span><ShieldCheck size={14}/>已按导入格式整理，保留完整词组。</span><button className="text-button" onClick={() => setHelpOpen(true)}>查看格式规则<ArrowRight size={12}/></button></div>
+              <div className="stage-actions"><button className="text-button" onClick={() => goTo(2)}><ArrowLeft size={14}/>继续核对</button><span className="action-hint">保存审核项目，下次还能接着编辑。</span><button className="button secondary" onClick={saveProject}><FolderOpen size={16}/>保存审核项目</button></div>
+            </section>}
+          </motion.div></AnimatePresence>
+          {warnings.length > 0 && <Disclosure className="warnings" title={`${warnings.length} 条资料 / 审核提示`} open={warningsOpen} onToggle={() => setWarningsOpen(!warningsOpen)}><ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></Disclosure>}
+          {stage === 1 && !parsed && !running && <div className="start-shortcuts"><button className="text-button" disabled={busy} onClick={showExample}><span className="play-dot"><ArrowRight size={12}/></span>先试试一个小示例</button><span className="shortcut-divider"/><button className="text-button" disabled={busy} onClick={() => projectInput.current?.click()}><FolderOpen size={14}/>继续已有项目</button></div>}
+          <footer><span>少一点误解，多一点默契。</span><span className="footer-language"><Globe2 size={12}/>中英双语<span className="footer-divider">·</span>HotWord</span></footer>
+        </div>
+      </main>
+      <ModelPanel settings={modelSettings} loading={modelsLoading} loadError={modelsError} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>
+      <OverlayPanel open={historyOpen} onOpenChange={setHistoryOpen} title="近期任务" description="AI 任务结果保留 7 天，选择任务即可继续。"><div className="history-toolbar"><span>{jobs.length} 个任务</span><button className="text-button" disabled={historyLoading} aria-label="刷新任务" onClick={() => refreshJobs().catch(() => {})}><RefreshCw size={13} className={historyLoading ? 'spin' : ''}/>刷新</button></div>{historyError && <p className="error-text" role="alert">{historyError}</p>}<div className="history">{jobs.length ? jobs.map(job => <div className={`job ${activeJob?.id === job.id ? 'selected' : ''}`} key={job.id}><button className="job-main" disabled={busy || running} onClick={() => openJob(job)}><span className="job-file"><FileText size={19}/></span><span><b>{job.name}</b><small><i className={`status-dot ${job.status}`}/>{statusNames[job.status]} · {new Date(job.created_at).toLocaleDateString('zh-CN')} · {job.mode === 'personal' ? '个人服务' : '团队服务'}</small></span><ChevronRight size={16}/></button><Tip text="删除云端任务"><button className="icon-button job-delete" aria-label={`删除任务 ${job.name}`} disabled={busy || running} onClick={e => { deleteTrigger.current = e.currentTarget; setPendingDelete(job); }}><Trash2 size={15}/></button></Tip></div>) : <div className="no-results"><span className="empty-icon"><Clock3 size={24}/></span><b>{historyLoading ? '正在读取任务' : '下一场会议，从这里开始'}</b><p>上传资料后，AI 任务会出现在这里。</p></div>}</div>{activeJob && <Disclosure title="当前任务的模型与用量" open={sourceOpen} onToggle={() => setSourceOpen(!sourceOpen)}><p className="task-model-note">{providerNames[activeJob.provider]} · {activeJob.model}<br/>{activeJob.input_tokens.toLocaleString()} 输入 / {activeJob.output_tokens.toLocaleString()} 输出 Token{activeJob.usage_estimated ? '（含估计用量）' : ''}{activeJob.estimated_usd === null ? '' : ` · 预估 $${activeJob.estimated_usd.toFixed(4)}`}</p></Disclosure>}</OverlayPanel>
+      <OverlayPanel open={helpOpen} onOpenChange={setHelpOpen} title="三步，准备一场好对话" description="把会议里容易译错的词，提前整理好。" className="help-dialog"><ol className="guide-steps"><li><span>01</span><div><h3>准备资料</h3><p>上传会议文档或双语对照表。双语表沿用原译法，其他文字资料可由 AI 提取。</p></div></li><li><span>02</span><div><h3>核对词条</h3><p>直接修改原词与译文，勾选“指定翻译”确认译法。点击词条旁的“…”查看出处、调整重要度或设置必保。</p></div></li><li><span>03</span><div><h3>下载词库</h3><p>分别下载热词清单和指定翻译 TXT。也可以保存 JSON 审核项目，之后继续编辑。</p></div></li></ol><details className="help-details"><summary>支持的资料与读取范围</summary><p>单文件最大 20 MB。支持文字型 PDF（最多 80 页）、Excel、Word、TXT 和 CSV；每表最多 5,000 行。扫描 PDF、图片中的文字暂不支持，需先转成文字文档。</p><p>AI 处理所选文本，最多 120,000 字符。上传后可选择页码 / 工作表，并查看原文预览。</p></details><details className="help-details"><summary>TXT 格式与字数规则</summary><FormatPlayground/><p>热词上限 2,048，指定翻译上限 20,480 个 UTF-16 字符，包含 BOM 与 CRLF。英文短语与中文词组完整保留；条目内部的连字符、逗号会换为空格。</p><p>超限时按必保、专名与重要度取舍完整条目；必保超限或冲突会阻止下载。尚未确认的 AI 建议译法需先人工确认。</p></details></OverlayPanel>
+      <OverlayPanel open={!!edited} onOpenChange={open => { if (!open) setEditingTerm(undefined); }} title="词条详情" description="查看原文依据，调整这个词的取舍方式。" className="term-dialog">{edited && <><div className="term-edit-fields"><label>原词<input aria-label={`详细原词 ${edited.source}`} maxLength={180} value={edited.source} onChange={e => update(edited.id, { source: e.target.value, basis: 'manual' })}/></label><label>译文<input aria-label={`详细译文 ${edited.source}`} maxLength={180} value={edited.target} onChange={e => update(edited.id, { target: e.target.value, basis: 'manual', translation: false })} placeholder="填写完整译文"/></label><label>类别<select aria-label={`类别 ${edited.source}`} value={edited.category} onChange={e => update(edited.id, { category: e.target.value as Category })}>{Object.entries(categoryNames).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label><label>重要度<PrioritySlider label={`重要度 ${edited.source}`} value={edited.priority} onChange={v => update(edited.id, { priority: v })}/></label></div><div className="term-detail-toggles"><Switch checked={edited.pinned} onChange={v => update(edited.id, { pinned: v })} label={`必保 ${edited.source}`}/><Toggle label={`详情指定翻译 ${edited.source}`} text="确认指定翻译" checked={edited.translation} disabled={!edited.target.trim()} onChange={v => update(edited.id, { translation: v })}/></div><div className="evidence-card"><span className="small-kicker">原文依据 · {edited.location || '手动录入'}</span><p>{edited.evidence || '这个词条由你手动添加。'}</p></div>{excluded.filter(e => e.id === edited.id).map((e, i) => <p className="error-text" key={i}>{e.reason}</p>)}<div className="dialog-actions"><button className="text-button remove-term" aria-label={`删除词条 ${edited.source}`} onClick={() => { removeTerm(edited); setEditingTerm(undefined); }}><Trash2 size={14}/>移除词条</button><button className="button primary" onClick={() => setEditingTerm(undefined)}>完成<Check size={15}/></button></div></>}</OverlayPanel>
+      <input ref={input} hidden type="file" accept=".pdf,.xlsx,.docx,.txt,.csv" onChange={e => { if (e.target.files?.[0]) readFile(e.target.files[0]); e.target.value = ''; }}/>
+      <input ref={projectInput} hidden type="file" accept=".json" onChange={e => { if (e.target.files?.[0]) importProject(e.target.files[0]); e.target.value = ''; }}/>
+      <ConfirmDialog open={!!pendingDelete} onClose={() => setPendingDelete(undefined)} onConfirm={deleteJob} busy={deleting} title="删除这个云端任务？" returnFocus={() => deleteTrigger.current?.isConnected ? deleteTrigger.current.focus() : document.querySelector<HTMLButtonElement>('[aria-label="刷新任务"]')?.focus()}>{pendingDelete?.name} 的任务记录及云端文件将被删除。</ConfirmDialog>
+      <AnimatePresence>{toast && <motion.div key={toast.id} className="toast" role="status" initial={{ opacity: 0, y: 24, scale: .96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: .96 }}><span className="toast-check"><Check size={14}/></span><span>{toast.message}</span>{toast.action && <button onClick={toast.action}>撤销</button>}<button className="toast-close" aria-label="关闭操作提示" onClick={() => setToast(undefined)}><X size={14}/></button></motion.div>}</AnimatePresence>
+    </div>
+  </Tooltip.Provider></MotionConfig>;
 }
-function SectionTitle({ number, title, detail, right }: { number: string; title: string; detail: string; right: ReactNode }) {
-  return <div className="section-title"><div><span className="section-number">{number}</span><div><h2>{title}</h2><p>{detail}</p></div></div>{right}</div>;
-}
+
 function FormatPlayground() {
   const [reversed, setReversed] = useState(false);
   return <div className="format-playground"><div className="format-label"><span>指定翻译，长这样</span><Tip text="交换原词与译文，体验完整映射"><motion.button className="icon-button" aria-label="交换格式示例方向" onClick={() => setReversed(!reversed)} whileTap={{ rotate: 180 }}><ArrowLeftRight size={13}/></motion.button></Tip></div><div className="format-pair"><motion.span layout className={reversed ? 'chinese' : ''} key={reversed ? 'cn' : 'en'}>{reversed ? '产业协同' : 'Industrial Collaboration'}</motion.span><span className="mapping-dash">-</span><motion.span layout className={reversed ? '' : 'chinese'} key={reversed ? 'en' : 'cn'}>{reversed ? 'Industrial Collaboration' : '产业协同'}</motion.span><span className="mapping-comma">，</span></div><p><Check size={12}/>完整词组 · 一个连接符 · 逗号分隔条目</p></div>;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, KeyRound, LoaderCircle, Plus, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
 import { api } from '../api';
@@ -35,7 +35,7 @@ export function ModelPanel({ settings, loading, loadError, selection, onSelect, 
   loading: boolean; loadError: string;
   open: boolean; onOpenChange: (open: boolean) => void; refresh: () => Promise<void>; admin: boolean;
 }) {
-  const [tab, setTab] = useState('personal'), [config, setConfig] = useState(modelDefaults('openai'));
+  const [tab, setTab] = useState('service'), [config, setConfig] = useState(modelDefaults('openai'));
   const [key, setKey] = useState(''), [name, setName] = useState('我的 OpenAI'), [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState<string>(), [tested, setTested] = useState(''), [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(''), [error, setError] = useState('');
@@ -43,15 +43,15 @@ export function ModelPanel({ settings, loading, loadError, selection, onSelect, 
   const service = selection?.mode === 'team' ? settings?.services.find(s => s.id === selection.serviceId) : undefined;
   const credential = selection?.mode === 'personal' ? settings?.credentials.find(s => s.id === selection.credentialId) : undefined;
   const payload = { name, config, apiKey: key, remember }, fingerprint = JSON.stringify(payload);
+  const restoreFocus = useRef<HTMLElement | null>(null);
   useEffect(() => { if (!open) { setKey(''); setTested(''); setError(''); setMessage(''); } }, [open]);
   async function action(fn: () => Promise<void>) { setBusy(true); setError(''); setMessage(''); try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   function edit(c: Credential) { setEditing(c.id); setName(c.name); setConfig(c.config); setRemember(c.remember); setKey(''); setTested(''); setMessage(''); setError(''); }
-  return <>
-    <div id="model-panel" className="model-panel">
+  const servicePicker = <div id="model-panel" className="model-panel">
       <div className="model-panel-heading"><span><KeyRound size={17}/><b>本次使用的 AI 服务</b></span><button className="text-button" onClick={() => onOpenChange(true)}><Settings2 size={14}/>模型与密钥</button></div>
       <Segmented value={mode} label="AI 使用模式" options={[{ value: 'team', label: '团队服务' }, { value: 'personal', label: '个人 API Key' }]} onChange={v => {
         if (v === 'team') onSelect({ mode: 'team', serviceId: settings?.services.find(s => s.ready)?.id ?? '' });
-        else { onSelect({ mode: 'personal', credentialId: settings?.credentials[0]?.id ?? '' }); if (!settings?.credentials.length) onOpenChange(true); }
+        else { onSelect({ mode: 'personal', credentialId: settings?.credentials[0]?.id ?? '' }); if (!settings?.credentials.length) setTab('personal'); }
       }}/>
       <label className="model-choice">{mode === 'team' ? '团队开放的模型' : '我的个人配置'}<select aria-label="本次 AI 配置" disabled={!settings || loading || !!loadError} value={mode === 'team' ? service?.id ?? '' : credential?.id ?? ''} onChange={e => onSelect(mode === 'team' ? { mode: 'team', serviceId: e.target.value } : { mode: 'personal', credentialId: e.target.value })}>
         <option value="" disabled>{loading ? '正在读取配置…' : loadError ? '配置加载失败，请重试' : settings ? '请选择服务配置' : '配置尚未加载'}</option>
@@ -59,14 +59,14 @@ export function ModelPanel({ settings, loading, loadError, selection, onSelect, 
       </select></label>
       {loadError && <div className="model-load-error"><p className="error-text" role="alert">{loadError}</p><button className="text-button" disabled={loading} onClick={() => { refresh().catch(() => {}); }}>重新读取配置</button></div>}
       <p className="model-billing"><ShieldCheck size={14}/>{service ? `团队服务 · ${providerNames[service.config.provider]} · ${service.config.model}；费用由团队承担。` : credential ? `个人服务 · ${providerNames[credential.config.provider]} · ${credential.config.model}；本次调用使用你的 API Key。` : mode === 'personal' ? '先在“模型与密钥”中测试并保存个人配置。' : '选择团队已开放的服务后开始提取。'}</p>
-      {settings && <small className="model-quota">每日任务数、Token 用量及金额不限，持续记录实际用量。每人同时运行 {settings.platformConcurrency} 个任务；输出不完整时自动拆分继续处理。</small>}
-      {settings?.available && <small className="model-quota">当前可启动 {settings.available.concurrency} 个并发任务。</small>}
-    </div>
-    <Dialog.Root open={open} onOpenChange={v => { if (!busy) onOpenChange(v); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content model-dialog" onPointerDownOutside={e => { if (busy) e.preventDefault(); }} onEscapeKeyDown={e => { if (busy) e.preventDefault(); }}>
+      {settings && <details className="help-details"><summary>查看并发与用量规则</summary><small className="model-quota">每人同时运行 {settings.platformConcurrency} 个任务，持续记录用量。输出不完整时自动拆分继续处理；每日任务数、Token 与金额不限。</small>{settings.available && <small className="model-quota">当前可启动 {settings.available.concurrency} 个任务。</small>}</details>}
+    </div>;
+  return <>
+    <Dialog.Root open={open} onOpenChange={v => { if (!busy) onOpenChange(v); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content model-dialog" onOpenAutoFocus={() => { restoreFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }} onCloseAutoFocus={e => { e.preventDefault(); restoreFocus.current?.isConnected && restoreFocus.current.focus(); }} onPointerDownOutside={e => { if (busy) e.preventDefault(); }} onEscapeKeyDown={e => { if (busy) e.preventDefault(); }}>
       <Dialog.Title>模型与密钥</Dialog.Title><Dialog.Description>选择自己的 API Key 或团队服务。新设置只影响之后提交的任务。</Dialog.Description>
       <button className="dialog-close icon-button" aria-label="关闭模型配置" disabled={busy} onClick={() => onOpenChange(false)}><X size={18}/></button>
-      {admin && <Segmented value={tab} label="模型设置页面" options={[{ value: 'personal', label: '我的密钥' }, { value: 'admin', label: '团队管理' }]} onChange={v => { if (!busy) setTab(v); }}/>}
-      {tab === 'personal' ? <>
+      <Segmented value={tab} label="模型设置页面" options={[{ value: 'service', label: '本次服务' }, { value: 'personal', label: '我的密钥' }, ...(admin ? [{ value: 'admin', label: '团队管理' }] : [])]} onChange={v => { if (!busy) setTab(v); }}/>
+      {tab === 'service' ? <>{servicePicker}<div className="dialog-actions"><button className="button primary" onClick={() => onOpenChange(false)}><Check size={15}/>完成选择</button></div></> : tab === 'personal' ? <>
         <div className="key-notice"><ShieldCheck size={17}/><p>个人密钥会经过我们托管的后端，由后端加密保存和调用；有部署权限的维护人员属于信任范围。浏览器不长期保存明文密钥。</p></div>
         {loadError ? <div className="model-load-error"><p className="error-text" role="alert">配置读取失败，暂时无法确认个人密钥服务状态。{loadError}</p><button className="text-button" disabled={loading} onClick={() => action(refresh)}>重新读取配置</button></div>
           : !settings ? <p role="status">{loading ? '正在读取个人密钥配置…' : '请先读取服务配置。'}</p>
