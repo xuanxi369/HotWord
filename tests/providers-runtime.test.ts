@@ -11,7 +11,7 @@ beforeAll(async () => {
     stdin: {
       resolveDir: fileURLToPath(new URL('..', import.meta.url)),
       contents: `
-        import { invokeModel } from './server/providers';
+        import { invokeModel, OutputLimitError } from './server/providers';
         import { modelDefaults } from './shared/models';
         export default { async fetch(request) {
           const url = new URL(request.url);
@@ -19,7 +19,7 @@ beforeAll(async () => {
             const result = await invokeModel({}, modelDefaults(url.searchParams.get('provider')), 'synthetic-key', url.searchParams.get('scenario') || 'success', 'synthetic text');
             return Response.json({ ok: true, ...result });
           } catch (error) {
-            return Response.json({ ok: false, message: error.message, retryable: error.retryable, usage: error.usage });
+            return Response.json({ ok: false, message: error.message, retryable: error.retryable, usage: error.usage, ...(error instanceof OutputLimitError ? { outputLimited: true } : {}) });
           }
         } };
       `,
@@ -36,6 +36,12 @@ beforeAll(async () => {
           return new Response('private-provider-detail', { status: 307, headers: { Location: 'https://other.example/' } });
         }
         const text = '{"terms":[]}', usage = { prompt_tokens: 10, completion_tokens: 5, input_tokens: 10, output_tokens: 5 };
+        if (scenario === 'truncated') {
+          const limitedUsage = { ...usage, completion_tokens: 8000, output_tokens: 8000 };
+          if (host === 'api.openai.com') return Response.json({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, usage: limitedUsage });
+          if (host === 'api.anthropic.com') return Response.json({ stop_reason: 'max_tokens', usage: limitedUsage });
+          return Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"terms":[' } }], usage: limitedUsage });
+        }
         if (host === 'api.openai.com') return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }], usage });
         if (host === 'api.anthropic.com') return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text }], usage });
         return Response.json({ choices: [{ finish_reason: 'stop', message: { content: text } }], usage });
@@ -53,5 +59,9 @@ describe('Cloudflare 真实运行时的外部服务请求', () => {
   it('重定向被明确拒绝且不跟随到其他域名', async () => {
     const result = await (await runtime.dispatchFetch('http://localhost/?provider=deepseek&scenario=redirect')).json();
     expect(result).toEqual({ ok: false, message: '服务商接口返回重定向，已停止请求，请检查服务商接口配置', retryable: false, usage: { input: 0, output: 0, estimated: false } });
+  });
+  for (const provider of ['openai', 'claude', 'deepseek', 'zhipu', 'qwen']) it(`${provider} 在 Workers 中能识别截断并保留 8000 Token 实际用量`, async () => {
+    const result = await (await runtime.dispatchFetch(`http://localhost/?provider=${provider}&scenario=truncated`)).json();
+    expect(result).toMatchObject({ ok: false, outputLimited: true, retryable: false, usage: { input: 10, output: 8000, estimated: false } });
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { endpoint, ModelConfigSchema, modelDefaults, type Provider } from '../shared/models';
-import { extractChunk } from '../server/ai';
+import { extractChunk, promptTokenReserve, termLimit } from '../server/ai';
 import { buildRequest, invokeModel, parseModelJson } from '../server/providers';
 import type { Env } from '../server/env';
 
@@ -41,6 +41,16 @@ describe('五家服务原生协议与共同提取规则', () => {
     expect(() => ModelConfigSchema.parse({ ...modelDefaults('claude'), outputMode: 'json_schema' })).toThrow();
     expect(buildRequest(modelDefaults('qwen'), 's', 't')).toHaveProperty('enable_thinking', false);
     expect(buildRequest(modelDefaults('deepseek'), 's', 't')).toHaveProperty('thinking', { type: 'disabled' });
+  });
+  it('提取提示词按实际输出上限限制条数、要求最短证据和紧凑 JSON', async () => {
+    const config = { ...modelDefaults('deepseek'), maxOutputTokens: 2048 };
+    const fetcher = vi.fn().mockResolvedValue(Response.json(reply('deepseek'))); vi.stubGlobal('fetch', fetcher);
+    await extractChunk({} as Env, config, 'synthetic-key', text, '原文', 't', vi.fn());
+    const body = JSON.parse(fetcher.mock.calls[0][1].body), system = body.messages[0].content as string;
+    expect(body.max_tokens).toBe(2048);
+    expect(system).toContain(`最多 ${termLimit(config)} 条词条`);
+    expect(system).toContain('最短摘录'); expect(system).toContain('紧凑 JSON');
+    expect(system.length + 256).toBeLessThanOrEqual(promptTokenReserve);
   });
   it('401 错误不泄露服务商响应或密钥，不换密钥，不重试', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('secret-test-key sensitive provider detail', { status: 401 })); vi.stubGlobal('fetch', fetcher);

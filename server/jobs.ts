@@ -1,7 +1,7 @@
-import { JobCreateSchema, JobInputSchema, type Job } from '../shared/schema';
+import { JobCreateSchema, JobInputSchema, type Job, type JobInput } from '../shared/schema';
 import { ModelConfigSchema, type ModelConfig } from '../shared/models';
 import { chunkSegments } from '../shared/chunks';
-import { promptTokenReserve } from './ai';
+import { promptTokenReserve, termLimit } from './ai';
 import { HttpError } from './auth';
 import { credentialConfig, decryptKey, encryptKey, ownedCredential, type StoredCredential } from './credentials';
 import { platformLimits, policy, services } from './models';
@@ -15,7 +15,15 @@ export async function ownedJob(env: Env, id: string, owner: string) {
   if (!job) throw new HttpError(404, '任务不存在或已过期');
   return job;
 }
-export function chunkSize(config: ModelConfig) { return Math.min(10000, config.contextWindow - config.maxOutputTokens - promptTokenReserve - 1024); }
+export function chunkSize(config: ModelConfig) {
+  const size = Math.min(10000, Math.floor(config.maxOutputTokens * 0.75), config.contextWindow - config.maxOutputTokens - promptTokenReserve - 1024);
+  if (size < 2) throw new HttpError(400, '模型上下文不足以容纳提取提示词和输出预算，请增大上下文长度或降低输出上限');
+  return size;
+}
+export function extractionChunks(segments: JobInput['segments'], config: ModelConfig) {
+  // Reserve room for two candidates per bilingual row, including evidence.
+  return chunkSegments(segments, chunkSize(config), Math.max(1, Math.floor(termLimit(config) / 2)));
+}
 export async function createJob(env: Env, owner: string, raw: unknown) {
   const parsed = JobCreateSchema.safeParse(raw);
   if (!parsed.success) throw new HttpError(400, '输入无效，请检查模型配置、名称、片段数量及 120000 字符限制');
@@ -28,12 +36,14 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     teamKey(env, service.config.provider);
     config = service.config; serviceName = service.name; pricing = { input: service.inputUsdPerMillion, output: service.outputUsdPerMillion };
   } else { credential = await ownedCredential(env, selection.credentialId, owner); config = credentialConfig(credential); serviceName = credential.name; personalKey = await decryptKey(env, credential, owner, credential.id); }
-  const chunks = chunkSegments(parsed.data.segments, chunkSize(config));
-  const reserve = { input: 2 * chunks.reduce((n, c) => n + c.text.length + promptTokenReserve, 0), output: 2 * chunks.length * config.maxOutputTokens };
+  const chunks = extractionChunks(parsed.data.segments, config);
+  // A parent plus two smaller parts, each with at most one connection retry.
+  // Text can be sent twice at both levels; prompts can be sent six times.
+  const reserve = { input: chunks.reduce((n, c) => n + 4 * c.text.length + 6 * promptTokenReserve, 0), output: 6 * chunks.length * config.maxOutputTokens };
   const reservedUsd = price(reserve, pricing), limits = await policy(env, owner), team = selection.mode === 'team';
   if (team && limits.teamDailyUsd !== null && reservedUsd === null) throw new HttpError(503, '该团队模型未配置价格，无法执行金额额度校验，请联系管理员');
   const id = crypto.randomUUID(), now = Date.now(), since = now - 86400000;
-  // Admission and job creation share a D1 transaction. Reservations include one retry per chunk.
+  // Admission and job creation share a D1 transaction, including bounded recovery.
   const admission = env.DB.prepare(`INSERT INTO admissions(id,owner,mode,credential_id,created_at,reserved_input,reserved_output,reserved_usd)
     SELECT ?,?,?,?,?,?,?,? WHERE
     (SELECT COUNT(*) FROM admissions WHERE owner=? AND created_at>?)<? AND

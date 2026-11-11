@@ -6,6 +6,9 @@ export type TokenUsage = { input: number; output: number; estimated: boolean };
 export class ModelError extends HttpError {
   constructor(message: string, public retryable = false, public usage?: TokenUsage, status = 502) { super(status, message); }
 }
+export class OutputLimitError extends ModelError {
+  constructor(message: string, usage: TokenUsage) { super(message, false, usage); }
+}
 export const secretNames: Partial<Record<Provider, keyof Env>> = { openai: 'OPENAI_API_KEY', claude: 'ANTHROPIC_API_KEY', deepseek: 'DEEPSEEK_API_KEY', zhipu: 'ZHIPU_API_KEY', qwen: 'QWEN_API_KEY' };
 export function teamKey(env: Env, provider: Provider): string {
   if (provider === 'cloudflare') return '';
@@ -36,7 +39,9 @@ export function buildRequest(c: ModelConfig, system: string, text: string, schem
 export function decodeReply(c: ModelConfig, raw: any, fallback: TokenUsage): { value: unknown; usage: TokenUsage } {
   const usage = usageOf(raw, fallback);
   const fail = (message: string): never => { throw new ModelError(message, false, usage); };
+  const outputLimit = (message: string): never => { throw new OutputLimitError(message, usage); };
   if (c.provider === 'openai') {
+    if (raw?.status === 'incomplete' && raw?.incomplete_details?.reason === 'max_output_tokens') outputLimit('模型输出达到上限，请提高输出上限或减少所选内容');
     if (raw?.status === 'incomplete') fail('模型输出未完成或达到输出上限，请提高输出上限或减少所选内容');
     if (raw?.status !== 'completed') fail('OpenAI 未返回完整结果，请检查模型配置后重试');
     const content = (raw.output ?? []).filter((o: any) => o.type === 'message').flatMap((o: any) => o.content ?? []);
@@ -46,7 +51,7 @@ export function decodeReply(c: ModelConfig, raw: any, fallback: TokenUsage): { v
     return { value, usage };
   }
   if (c.provider === 'claude') {
-    if (raw?.stop_reason === 'max_tokens') fail('Claude 输出被截断，请提高输出上限或减少所选内容');
+    if (raw?.stop_reason === 'max_tokens') outputLimit('Claude 输出被截断，请提高输出上限或减少所选内容');
     if (raw?.stop_reason === 'refusal') fail('Claude 拒绝处理所选内容，请检查资料');
     if (!['end_turn', 'stop_sequence'].includes(raw?.stop_reason)) fail('Claude 未返回完整文本，请检查模型能力');
     const value = (raw.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text ?? '').join('');
@@ -54,7 +59,7 @@ export function decodeReply(c: ModelConfig, raw: any, fallback: TokenUsage): { v
     return { value, usage };
   }
   const choice = raw?.choices?.[0];
-  if (choice?.finish_reason === 'length') fail('模型输出被截断，请提高输出上限或减少所选内容');
+  if (choice?.finish_reason === 'length') outputLimit('模型输出被截断，请提高输出上限或减少所选内容');
   if (choice?.finish_reason === 'content_filter' || choice?.message?.refusal) fail('模型拒绝处理所选内容，请检查资料');
   if (choice && choice.finish_reason !== 'stop') fail('模型未返回完整文本，请检查配置');
   const value = raw?.response ?? choice?.message?.content ?? (c.provider === 'cloudflare' ? raw : undefined);

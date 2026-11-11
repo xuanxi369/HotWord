@@ -60,7 +60,7 @@ describe('任务快照、原子额度与费用归属', () => {
   it('可用额度包含活跃预留，任务结束后只扣已消耗 Token', async () => {
     const { env } = testEnv(); env.TEAM_SERVICES = JSON.stringify([{ id: 'openai', name: '团队模型', config: modelDefaults('openai'), inputUsdPerMillion: 1, outputUsdPerMillion: 2 }]);
     const job = await createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } });
-    const pending = await settings(env, owner); expect(pending.available.teamOutput).toBe(1000000 - 16000); expect(pending.available.concurrency).toBe(1);
+    const pending = await settings(env, owner); expect(pending.available.teamOutput).toBe(1000000 - 48000); expect(pending.available.concurrency).toBe(1);
     await recordUsage(env, { id: job.id, owner, mode: 'team', provider: 'openai', model: 'gpt-4.1-mini' }, { input: 1, output: 2 }, { input: 100, output: 40, estimated: false });
     await releaseTask(env, job.id); const done = await settings(env, owner); expect(done.available.teamOutput).toBe(1000000 - 40); expect(done.available.teamTasks).toBe(19); expect(done.available.concurrency).toBe(2);
   });

@@ -5,6 +5,7 @@ import { ExtractionWorkflow } from '../server/workflow';
 import worker from '../server/index';
 import { modelDefaults, type Provider } from '../shared/models';
 import { compileTranslations } from '../shared/compiler';
+import { bisectText } from '../shared/chunks';
 import type { ExtractionResult } from '../shared/schema';
 import { testEnv } from './support/database';
 import { NonRetryableError } from './support/workflow-runtime';
@@ -83,6 +84,68 @@ describe('后台任务、清理与用量闭环', () => {
     expect(saved?.error).not.toContain('private-network-detail'); expect(saved?.error).not.toContain('Workflow step failed');
     expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
     expect([...objects.keys()]).toHaveLength(0);
+  });
+  it('截断后自动二分，每部分独立重试，全部用量计入预留且原文无遗漏', async () => {
+    const dataset = `${text}\n光伏组件 Photovoltaic Module`, parts = bisectText(dataset)!;
+    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '合成术语表', text: dataset }]);
+    const received: string[] = [];
+    const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const source = JSON.parse(init.body as string).messages[1].content as string; received.push(source);
+      if (received.length % 2) throw new Error('private transient network detail');
+      if (source === dataset) return Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"terms":[' } }], usage: { prompt_tokens: 100, completion_tokens: 8000 } });
+      const terms = result.terms.filter(t => source.includes(t.source) && source.includes(t.target));
+      if (source.includes('光伏组件')) terms.push({ source: '光伏组件', target: 'Photovoltaic Module', category: 'industry', priority: 80, basis: 'source', evidence: '光伏组件 Photovoltaic Module' });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms }) } }], usage: { prompt_tokens: 100, completion_tokens: 80 } });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const durable = await run(env, job.id), saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
+    expect(received).toEqual([dataset, dataset, parts[0], parts[0], parts[1], parts[1]]);
+    expect(saved.candidates.map(c => c.source)).toEqual(['Somnia', 'Industrial Collaboration', '光伏组件']);
+    expect(new Set(saved.candidates.map(c => c.id)).size).toBe(3);
+    expect(saved.warnings.join('')).toContain('自动拆小');
+    const admission = sqlite.prepare('SELECT input_tokens,output_tokens,reserved_input,reserved_output,active FROM admissions WHERE id=?').get(job.id)!;
+    expect(Number(admission.input_tokens)).toBeLessThanOrEqual(Number(admission.reserved_input));
+    expect(Number(admission.output_tokens)).toBeLessThanOrEqual(Number(admission.reserved_output));
+    expect(admission.active).toBe(0);
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM ai_usage WHERE job_id=?').get(job.id)?.n).toBe(6);
+    expect(sqlite.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', error: null });
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+    expect(JSON.stringify(durable)).not.toContain('产业协同');
+    await expect(taskKey(env, job.id, owner)).rejects.toThrow();
+  });
+  it('缩小后的片段仍截断时停止，清理所有结果且不无限重试', async () => {
+    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '合成术语表', text: `${text}\n光伏组件 Photovoltaic Module` }]);
+    const fetcher = vi.fn().mockImplementation(async () => Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"terms":[' } }], usage: { prompt_tokens: 100, completion_tokens: 8000 } }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(run(env, job.id, true)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(sqlite.prepare('SELECT error FROM jobs WHERE id=?').get(job.id)?.error).toContain('缩小片段后模型输出仍达到上限');
+    expect([...objects.keys()]).toHaveLength(0);
+    expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
+  });
+  it('密集双语表先按预算分片，截断的部分再拆小，最终保留所有词条', async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => `CompoundTerm${i}\t合成词条${i}`), dataset = rows.join('\n');
+    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '密集术语表', text: dataset }]);
+    const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string), lines = (body.messages[1].content as string).split('\n').filter(Boolean);
+      expect(body.max_tokens).toBe(8000);
+      if (lines.length > 24) return Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"terms":[' } }], usage: { prompt_tokens: 100, completion_tokens: 8000 } });
+      const terms = lines.map(evidence => {
+        const [source, target] = evidence.split('\t');
+        return { source, target, category: 'industry', priority: 80, basis: 'source', evidence };
+      });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms }) } }], usage: { prompt_tokens: 100, completion_tokens: terms.length * 100 } });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await run(env, job.id);
+    const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
+    expect(saved.candidates.map(c => `${c.source}\t${c.target}`)).toEqual(rows);
+    expect(new Set(saved.candidates.map(c => c.id)).size).toBe(rows.length);
+    expect(saved.warnings.join('')).toContain('2 个片段');
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    expect(sqlite.prepare('SELECT status,progress,total,input_tokens,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', progress: 3, total: 3, input_tokens: 700, output_tokens: 26000 });
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+    expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
   });
   it('一个片段成功、另一个截断时整项失败，不留下部分结果或密钥', async () => {
     const { env, objects, sqlite } = testEnv(), job = await personalJob(env, 'openai', [{ id: 'p', label: '第一页', text }, { id: 'q', label: '第二页', text: '字'.repeat(10000) }]);
