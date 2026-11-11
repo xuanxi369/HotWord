@@ -4,7 +4,7 @@ import type { Env } from './env';
 import { secretNames } from './providers';
 
 const requiredColumns: Record<string, string[]> = {
-  jobs: ['id', 'owner', 'name', 'status', 'progress', 'total', 'error', 'created_at', 'expires_at', 'mode', 'provider', 'model', 'service_name', 'model_config', 'service_id', 'credential_id', 'input_tokens', 'output_tokens', 'estimated_usd', 'usage_estimated'],
+  jobs: ['id', 'owner', 'name', 'status', 'progress', 'total', 'error', 'created_at', 'expires_at', 'mode', 'provider', 'model', 'service_name', 'model_config', 'service_id', 'credential_id', 'input_tokens', 'output_tokens', 'estimated_usd', 'usage_estimated', 'language_pair'],
   credentials: ['id', 'owner', 'name', 'masked_key', 'config', 'ciphertext', 'nonce', 'remember', 'created_at', 'expires_at'],
   job_secrets: ['job_id', 'owner', 'ciphertext', 'nonce', 'expires_at'],
   team_services: ['id', 'config'], member_policies: ['email', 'config'],

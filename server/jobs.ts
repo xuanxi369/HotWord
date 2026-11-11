@@ -2,29 +2,35 @@ import { JobCreateSchema, JobInputSchema, type Job, type JobInput } from '../sha
 import { ModelConfigSchema, type ModelConfig } from '../shared/models';
 import { chunkSegments } from '../shared/chunks';
 import { auditChunks } from '../shared/table-audit';
-import { callBudget, estimatedTermsPerChunk, promptTokenReserve } from './ai';
+import { callBudget, estimatedTermsPerChunk, modelPromptReserve } from './ai';
 import { HttpError } from './auth';
 import { credentialConfig, decryptKey, encryptKey, ownedCredential, type StoredCredential } from './credentials';
 import { platformLimits, services, settings } from './models';
 import { teamKey } from './providers';
 import { deleteObjects, price, releaseTask, type Pricing } from './store';
 import type { Env } from './env';
+import { LanguagePairSchema, type LanguagePair } from '../shared/languages';
 
-export const jobColumns = 'id,name,status,progress,total,error,created_at,mode,provider,model,service_name,input_tokens,output_tokens,estimated_usd,usage_estimated';
-export async function ownedJob(env: Env, id: string, owner: string) {
-  const job = await env.DB.prepare(`SELECT ${jobColumns} FROM jobs WHERE id=? AND owner=? AND expires_at>?`).bind(id, owner, Date.now()).first<Job>();
-  if (!job) throw new HttpError(404, '任务不存在或已过期');
-  return job;
+export const jobColumns = 'id,name,status,progress,total,error,created_at,mode,provider,model,service_name,input_tokens,output_tokens,estimated_usd,usage_estimated,language_pair';
+export type StoredJob = Job & { language_pair?: string | null };
+export function decodeJob(row: StoredJob): Job {
+  const { language_pair, ...job } = row;
+  return language_pair ? { ...job, languagePair: LanguagePairSchema.parse(JSON.parse(language_pair)) } : job;
 }
-export function chunkSize(config: ModelConfig) {
-  const size = Math.min(10000, Math.floor(config.maxOutputTokens * 0.75), config.contextWindow - config.maxOutputTokens - promptTokenReserve - 1024);
+export async function ownedJob(env: Env, id: string, owner: string) {
+  const job = await env.DB.prepare(`SELECT ${jobColumns} FROM jobs WHERE id=? AND owner=? AND expires_at>?`).bind(id, owner, Date.now()).first<StoredJob>();
+  if (!job) throw new HttpError(404, '任务不存在或已过期');
+  return decodeJob(job);
+}
+export function chunkSize(config: ModelConfig, languagePair?: LanguagePair) {
+  const size = Math.min(10000, Math.floor(config.maxOutputTokens * 0.75), config.contextWindow - config.maxOutputTokens - modelPromptReserve(languagePair) - 1024);
   if (size < 2) throw new HttpError(400, '模型上下文不足以容纳提取提示词和输出预算，请增大上下文长度或降低输出上限');
   return size;
 }
-export function extractionChunks(segments: JobInput['segments'], config: ModelConfig, auditCandidates?: JobInput['auditCandidates']) {
-  if (auditCandidates) return auditChunks(auditCandidates, chunkSize(config), estimatedTermsPerChunk(config));
+export function extractionChunks(segments: JobInput['segments'], config: ModelConfig, auditCandidates?: JobInput['auditCandidates'], languagePair?: LanguagePair) {
+  if (auditCandidates) return auditChunks(auditCandidates, chunkSize(config, languagePair), estimatedTermsPerChunk(config));
   // Reserve room for two candidates per bilingual row, including evidence.
-  return chunkSegments(segments, chunkSize(config), Math.max(1, Math.floor(estimatedTermsPerChunk(config) / 2)));
+  return chunkSegments(segments, chunkSize(config, languagePair), Math.max(1, Math.floor(estimatedTermsPerChunk(config) / 2)));
 }
 export async function createJob(env: Env, owner: string, raw: unknown) {
   const parsed = JobCreateSchema.safeParse(raw);
@@ -41,10 +47,10 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     config = service.config; serviceName = service.name; pricing = { input: service.inputUsdPerMillion, output: service.outputUsdPerMillion };
   } else { credential = await ownedCredential(env, selection.credentialId, owner); config = credentialConfig(credential); serviceName = credential.name; personalKey = await decryptKey(env, credential, owner, credential.id); }
   let chunks;
-  try { chunks = extractionChunks(parsed.data.segments, config, seeded); }
+  try { chunks = extractionChunks(parsed.data.segments, config, seeded, parsed.data.languagePair); }
   catch (e) { throw new HttpError(400, (e as Error).message); }
   // Keep per-call estimates for reporting; they do not gate task admission.
-  const reserve = callBudget(config, chunks[0].text);
+  const reserve = callBudget(config, chunks[0].text, parsed.data.languagePair);
   const reservedUsd = price(reserve, pricing), team = selection.mode === 'team';
   const id = crypto.randomUUID(), now = Date.now();
   // Admission and job creation share a D1 transaction.
@@ -56,9 +62,9 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     .bind(id, owner, selection.mode, credential?.id ?? null, now, reserve.input, reserve.output, reservedUsd ?? 0,
       owner, platformLimits.concurrency,
       credential?.id ?? null, credential?.id ?? null, owner, now, credential?.ciphertext ?? '', credential?.remember ?? 0, credential?.id ?? null);
-  const inserted = await env.DB.batch([admission, env.DB.prepare(`INSERT INTO jobs(id,owner,name,status,created_at,expires_at,mode,provider,model,service_name,model_config,service_id,credential_id)
-    SELECT ?,?,?,'queued',?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM admissions WHERE id=?)`)
-    .bind(id, owner, parsed.data.name, now, now + 7 * 86400000, selection.mode, config.provider, config.model, serviceName, JSON.stringify({ config, pricing }), selection.mode === 'team' ? selection.serviceId : null, credential?.id ?? null, id)]);
+  const inserted = await env.DB.batch([admission, env.DB.prepare(`INSERT INTO jobs(id,owner,name,status,created_at,expires_at,mode,provider,model,service_name,model_config,service_id,credential_id,language_pair)
+    SELECT ?,?,?,'queued',?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM admissions WHERE id=?)`)
+    .bind(id, owner, parsed.data.name, now, now + 7 * 86400000, selection.mode, config.provider, config.model, serviceName, JSON.stringify({ config, pricing }), selection.mode === 'team' ? selection.serviceId : null, credential?.id ?? null, parsed.data.languagePair ? JSON.stringify(parsed.data.languagePair) : null, id)]);
   if (!inserted[0].meta.changes) {
     const available = (await settings(env, owner)).available;
     if (!available.concurrency) throw new HttpError(429, '同时运行的任务已达上限，请等待当前任务结束后重试');

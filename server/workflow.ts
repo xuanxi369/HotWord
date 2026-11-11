@@ -5,7 +5,7 @@ import { bisectText } from '../shared/chunks';
 import { auditRows, bisectAudit } from '../shared/table-audit';
 import { auditChunk } from './table-audit';
 import { completeTranslations, resolveTranslationConflicts } from './translations';
-import { callBudget, extractChunk, promptTokenReserve } from './ai';
+import { callBudget, extractChunk, modelPromptReserve } from './ai';
 import { HttpError } from './auth';
 import type { Env } from './env';
 import { executionConfig, extractionChunks, type ExecutionJob } from './jobs';
@@ -27,7 +27,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
         const input = JobInputSchema.parse(await object.json());
         const job = await this.env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<ExecutionJob>();
         if (!job || !['queued', 'running'].includes(job.status)) throw new NonRetryableError('任务已取消');
-        const count = extractionChunks(input.segments, executionConfig(this.env, job).config, input.auditCandidates ?? input.translationCandidates).length;
+        const count = extractionChunks(input.segments, executionConfig(this.env, job).config, input.auditCandidates ?? input.translationCandidates,input.languagePair).length;
         if (!count) throw new NonRetryableError('没有可提取的文本');
         await this.env.DB.prepare("UPDATE jobs SET status='running', total=? WHERE id=? AND status='queued'").bind(count, id).run();
         return count;
@@ -48,7 +48,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             const input = JobInputSchema.parse(await object.json());
             const seeded = input.auditCandidates ?? input.translationCandidates;
             const split = seeded ? bisectAudit : bisectText;
-            let chunk = extractionChunks(input.segments, config, seeded)[i];
+            let chunk = extractionChunks(input.segments, config, seeded,input.languagePair)[i];
             for (const part of path) {
               const pieces = split(chunk.text);
               if (!pieces) throw new NonRetryableError('片段无法继续拆分，请提高输出上限');
@@ -60,18 +60,18 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
               const keyValue = job.mode === 'personal' ? await taskKey(this.env, id, job.owner) : teamKey(this.env, config.provider);
               const record = (usage: Parameters<typeof recordUsage>[3]) => recordUsage(this.env, job, pricing, usage);
               const beforeCall = async (text: string) => {
-                if (text.length + promptTokenReserve + config.maxOutputTokens + 1024 > config.contextWindow) throw new OutputLimitError('指定翻译上下文需要继续拆分');
-                await reserveModelCall(this.env, job, pricing, callBudget(config, text));
+                if (text.length + modelPromptReserve(input.languagePair) + config.maxOutputTokens + 1024 > config.contextWindow) throw new OutputLimitError('指定翻译上下文需要继续拆分');
+                await reserveModelCall(this.env, job, pricing, callBudget(config, text,input.languagePair));
               };
               if (input.translationCandidates) {
                 const rows = auditRows(chunk.text,input.translationCandidates);
-                result = await completeTranslations(this.env,config,keyValue,rows,rows.map(c=>c.evidence).join('\n'),beforeCall,record);
+                result = await completeTranslations(this.env,config,keyValue,rows,rows.map(c=>c.evidence).join('\n'),beforeCall,record,input.languagePair);
               } else {
                 await beforeCall(chunk.text);
-                result = input.auditCandidates ? await auditChunk(this.env, config, keyValue, chunk.text, auditRows(chunk.text, input.auditCandidates), record)
-                  : await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${suffix}`, record);
-                if (!input.auditCandidates && result.candidates.length) {
-                  const completed = await completeTranslations(this.env,config,keyValue,result.candidates,chunk.text,beforeCall,record);
+                result = input.auditCandidates ? await auditChunk(this.env, config, keyValue, chunk.text, auditRows(chunk.text, input.auditCandidates), record,input.languagePair)
+                  : await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${suffix}`, record,input.languagePair);
+                if ((!input.auditCandidates || input.languagePair) && result.candidates.length) {
+                  const completed = await completeTranslations(this.env,config,keyValue,result.candidates,chunk.text,beforeCall,record,input.languagePair);
                   result = {candidates:completed.candidates,warnings:[...result.warnings,...completed.warnings]};
                 }
               }
@@ -87,6 +87,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
               if (e instanceof ModelError && e.retryable) throw e;
               throw new NonRetryableError(reason);
             }
+            if (input.languagePair) result.languagePair = input.languagePair;
             await this.env.FILES.put(key, JSON.stringify(result));
           }
           return key;
@@ -114,6 +115,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
           const object = await this.env.FILES.get(key);
           if (!object) throw new NonRetryableError('片段结果缺失');
           const chunk = await object.json<ExtractionResult>();
+          if (chunk.languagePair) result.languagePair = chunk.languagePair;
           result.candidates.push(...chunk.candidates); result.warnings.push(...chunk.warnings);
         }
         result.warnings = [...new Set(result.warnings)];

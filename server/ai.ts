@@ -2,8 +2,11 @@ import { z } from 'zod';
 import { Category, type Candidate, type ExtractionResult } from '../shared/schema';
 import { termKey } from '../shared/compiler';
 import { termIssue } from '../shared/term-quality';
+import { multilingualTermIssue } from '../shared/multilingual-quality';
+import type { LanguagePair } from '../shared/languages';
+import { languageMismatch, multilingualAppears, multilingualExtractionPrompt, multilingualTranslationPrompt, multilingualVerificationPrompt } from './language-context';
 import { termRisk } from '../shared/review';
-import { auditPrompt } from './table-audit';
+import { auditPrompt, auditPromptForLanguages } from './table-audit';
 import { translationPrompt, verificationPrompt } from './translations';
 import type { Env } from './env';
 import type { ModelConfig } from '../shared/models';
@@ -45,22 +48,25 @@ export function appears(term: string, text: string): boolean {
   return new RegExp(pattern, 'u').test(haystack);
 }
 
-export function validateModelResult(raw: unknown, text: string, label: string, prefix: string): ExtractionResult {
+export function validateModelResult(raw: unknown, text: string, label: string, prefix: string, languagePair?: LanguagePair): ExtractionResult {
   const parsed = ModelResult.parse(raw), warnings: string[] = [], candidates: Candidate[] = [];
+  const quality = languagePair ? multilingualTermIssue : termIssue;
+  const exists = languagePair ? multilingualAppears : appears;
   parsed.terms.forEach((term, index) => {
-    const issue = termIssue(term.source);
+    const issue = quality(term.source);
     if (issue) { warnings.push(`${label}：已排除${issue}的模型候选`); return; }
+    if (languagePair && languageMismatch(term.source, languagePair.source)) { warnings.push(`${label}：原词文字与所选语言不符，已排除候选`); return; }
     if (term.category === 'person' && /待提供|待确认|姓名待|嘉宾姓名|\bTBD\b|\bto be confirmed\b/i.test(term.source)) {
       warnings.push(`${label}：未把待提供姓名的说明当作人名`); return;
     }
-    if (!appears(term.source, text) || !appears(term.evidence, text) || !appears(term.source, term.evidence)) {
+    if (!exists(term.source, text) || !exists(term.evidence, text) || !exists(term.source, term.evidence)) {
       warnings.push(`${label}：排除 1 条缺少原文依据的模型候选`); return;
     }
     const source = term.source.trim(); let target = term.target.trim(), basis = term.basis;
-    const targetIssue = target && termIssue(target);
+    const targetIssue = target && (quality(target) || (languagePair && languageMismatch(target, languagePair.target)));
     if (targetIssue) { target = ''; basis = 'none'; warnings.push(`${label}：译文为${targetIssue}，仅保留原词`); }
     const targetProof = term.targetEvidence || term.evidence;
-    if (target && basis === 'source' && (!appears(term.target, text) || !appears(targetProof,text) || !appears(term.target, targetProof))) basis = 'suggested';
+    if (target && basis === 'source' && (!exists(term.target, text) || !exists(targetProof,text) || !exists(term.target, targetProof))) basis = 'suggested';
     if (target && (basis === 'none' || (['person', 'company', 'place'].includes(term.category) && basis !== 'source'))) {
       target = ''; basis = 'none'; warnings.push(`${label}：未确认的专名译法已留空`);
     }
@@ -70,21 +76,25 @@ export function validateModelResult(raw: unknown, text: string, label: string, p
       location: label, hot: true, translation: Boolean(target && basis === 'source' && !ambiguous), pinned: false });
     if (ambiguous) warnings.push(`${label}：含斜杠别称的条目需要人工审核`);
   });
-  return { candidates, warnings: [...new Set(warnings)] };
+  return { candidates, warnings: [...new Set(warnings)], ...(languagePair ? { languagePair } : {}) };
 }
 
 export const promptTokenReserve = Math.max(prompt.length, auditPrompt.length, translationPrompt.length, verificationPrompt.length) + 512;
-export function callBudget(config: ModelConfig, text: string) { return { input: text.length + promptTokenReserve, output: config.maxOutputTokens }; }
+export function modelPromptReserve(languagePair?: LanguagePair) {
+  if (!languagePair) return promptTokenReserve;
+  return Math.max(multilingualExtractionPrompt(languagePair).length, multilingualTranslationPrompt(languagePair).length, multilingualVerificationPrompt(languagePair).length, auditPromptForLanguages(languagePair).length) + 512;
+}
+export function callBudget(config: ModelConfig, text: string, languagePair?: LanguagePair) { return { input: text.length + modelPromptReserve(languagePair), output: config.maxOutputTokens }; }
 // Estimate input chunk density only; never cap or discard returned candidates.
 export function estimatedTermsPerChunk(config: ModelConfig) { return Math.max(1, Math.floor((config.maxOutputTokens - 256) / 100)); }
-export async function extractChunk(env: Env, config: ModelConfig, key: string, text: string, label: string, prefix: string, record: (usage: TokenUsage) => Promise<void>): Promise<ExtractionResult> {
+export async function extractChunk(env: Env, config: ModelConfig, key: string, text: string, label: string, prefix: string, record: (usage: TokenUsage) => Promise<void>, languagePair?: LanguagePair): Promise<ExtractionResult> {
   let usage: TokenUsage | undefined;
   try {
-    const system = `${prompt}\n本次模型单次输出容量 ${config.maxOutputTokens} Token。只输出紧凑 JSON，不加缩进和说明；必须完整闭合 JSON。`;
+    const system = `${languagePair ? multilingualExtractionPrompt(languagePair) : prompt}\n本次模型单次输出容量 ${config.maxOutputTokens} Token。只输出紧凑 JSON，不加缩进和说明；必须完整闭合 JSON。`;
     const result = await invokeModel(env, config, key, system, text, schema); usage = result.usage;
     const raw = parseModelJson(result.value, usage);
     let validated: ExtractionResult;
-    try { validated = validateModelResult(raw, text, label, prefix); }
+    try { validated = validateModelResult(raw, text, label, prefix, languagePair); }
     catch { throw new ModelError('模型词条格式异常或缺少必需依据，请调整模型能力或重试', false, usage); }
     if ((raw as { complete?: boolean }).complete === false) throw new OutputLimitError('模型声明词条未提取完整，需要继续拆分处理', usage);
     return validated;

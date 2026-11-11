@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MemberPolicySchema, TeamServiceSchema } from '../shared/models';
 import { boundedJson, enforceOrigin, HttpError, identify } from './auth';
 import { CredentialInputSchema, decryptKey, encryptionReady, ownedCredential, saveCredential } from './credentials';
-import { createJob, jobColumns, ownedJob } from './jobs';
+import { createJob, decodeJob, jobColumns, ownedJob, type StoredJob } from './jobs';
 import { admitProbe, isAdmin, requireAdmin, serviceReady, services, settings, usageSummary } from './models';
 import { invokeModel, ModelError } from './providers';
 import { deleteObjects, releaseTask } from './store';
@@ -49,7 +49,7 @@ export async function fetchApi(request: Request, env: Env): Promise<Response> {
         await env.DB.prepare('INSERT INTO member_policies(email,config) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET config=excluded.config').bind(input.email, JSON.stringify(input)).run(); response = json({ saved: true });
       } else throw new HttpError(404, '接口不存在');
     } else if (url.pathname === '/api/jobs' && method === 'GET') {
-      const rows = await env.DB.prepare(`SELECT ${jobColumns} FROM jobs WHERE owner=? AND expires_at>? ORDER BY created_at DESC LIMIT 30`).bind(user.email, Date.now()).all(); response = json(rows.results);
+      const rows = await env.DB.prepare(`SELECT ${jobColumns} FROM jobs WHERE owner=? AND expires_at>? ORDER BY created_at DESC LIMIT 30`).bind(user.email, Date.now()).all<StoredJob>(); response = json(rows.results.map(decodeJob));
     } else if (url.pathname === '/api/jobs' && method === 'POST') response = json(await createJob(env, user.email, await boundedJson(request)), 202);
     else {
       const match = url.pathname.match(/^\/api\/jobs\/([0-9a-f-]{36})(\/result)?$/);

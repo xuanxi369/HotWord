@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ModelSelectionSchema, type ModelConfig } from './models';
+import { LanguagePairSchema, type LanguagePair } from './languages';
 
 export const Category = z.enum(['person', 'place', 'company', 'product', 'industry', 'other']);
 export type Category = z.infer<typeof Category>;
@@ -37,11 +38,12 @@ export const JobInputSchema = z.object({
   segments: z.array(SegmentSchema).min(1).max(80),
   auditCandidates: z.array(CandidateSchema).min(1).max(10000).optional(),
   translationCandidates: z.array(CandidateSchema).min(1).max(10000).optional(),
+  languagePair: LanguagePairSchema.optional(),
 }).refine(v => v.segments.reduce((n, s) => n + s.text.length, 0) <= 120_000, '解析文本超过 120000 字符，请分批处理')
   .refine(v => !(v.auditCandidates && v.translationCandidates), '请选择一种核对方式')
   .refine(v => !(v.auditCandidates ?? v.translationCandidates) || (v.auditCandidates ?? v.translationCandidates)!.reduce((n,c)=>n+c.source.length+c.target.length+c.evidence.length+c.location.length,0)<=120_000, '核对词条超过 120000 字符，请分批处理');
 export type JobInput = z.infer<typeof JobInputSchema>;
 export const JobCreateSchema = JobInputSchema.safeExtend({ selection: ModelSelectionSchema });
 export type Job = { id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed'; progress: number; total: number; error: string | null; created_at: number;
-  mode: 'team' | 'personal'; provider: ModelConfig['provider']; model: string; service_name: string; input_tokens: number; output_tokens: number; estimated_usd: number | null; usage_estimated: number };
-export type ExtractionResult = { candidates: Candidate[]; warnings: string[] };
+  mode: 'team' | 'personal'; provider: ModelConfig['provider']; model: string; service_name: string; input_tokens: number; output_tokens: number; estimated_usd: number | null; usage_estimated: number; languagePair?: LanguagePair };
+export type ExtractionResult = { candidates: Candidate[]; warnings: string[]; languagePair?: LanguagePair };

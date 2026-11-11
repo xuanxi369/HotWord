@@ -1,0 +1,22 @@
+/* Additive controls use the existing workbench spacing, inputs and theme tokens. */
+.header-nav .workspace-link.header-current { color: inherit; }
+.workbench-nav { flex-shrink: 0; }
+.workbench-nav .workspace-link { white-space: nowrap; }
+.language-options { border-bottom: 1px solid var(--line); padding-bottom: 18px; margin-bottom: 22px; }
+.language-options .table-controls { gap: 14px; }
+.language-options .table-controls select { min-width: 112px; max-width: 160px; }
+.language-options p { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 12px 0 0; }
+.source-preview[dir="auto"] { unicode-bidi: plaintext; }
+@media (max-width: 720px) {
+  .workbench-nav { gap: 14px; }
+  .header-nav .workspace-link.header-current { display: flex; }
+}
+@media (max-width: 420px) {
+  .workbench-nav { gap: 10px; }
+  .language-options .table-controls { gap: 8px; }
+  .language-options .table-controls > label { gap: 6px; font-size: 11px; }
+  .language-options .table-controls select { min-width: 90px; max-width: 120px; padding: 8px; }
+}
+@media (max-width: 360px) {
+  .workbench-nav .workspace-link { font-size: 10px; gap: 4px; width: auto; }
+}

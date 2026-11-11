@@ -10,7 +10,7 @@
 
 - `server/`、`src/`、`shared/` 和 `scripts/`。
 - `package.json`、`package-lock.json`、`wrangler.jsonc`。
-- `migrations/0001_jobs.sql` 和 `migrations/0002_model_credentials.sql`。
+- `migrations/0001_jobs.sql`、`migrations/0002_model_credentials.sql` 和 `migrations/0003_language_pair.sql`。
 
 部署拉取的是 GitHub 内容，本地修改需要先同步到该仓库。后文的配置可直接使用 GitHub 文件页右上角的铅笔编辑，再 Commit changes 到 main。不要上传 `.dev.vars`、node_modules、真实客户资料或 API Key。
 
@@ -34,12 +34,21 @@ R2 的 Public Development URL 和 Custom Domains 保持关闭。可在桶的 Set
 SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
 ```
 
-- **全新空库**：依次打开 GitHub 上的 [0001_jobs.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0001_jobs.sql) 和 [0002_model_credentials.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0002_model_credentials.sql)，将每份 SQL 按顺序复制到控制台执行。
-- **已有旧版 jobs 表**：保留原数据库，只执行尚未应用的 0002。先查看 `PRAGMA table_info(jobs);` 和现有迁移记录，避免重复执行 ALTER TABLE。
-- **已经应用 0002**：已有 mode / model_config 列及 credentials、job_secrets、team_services、member_policies、admissions、ai_usage、connection_probes 表，不要再次执行。
+- **全新空库**：依次打开 GitHub 上的 [0001_jobs.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0001_jobs.sql)、[0002_model_credentials.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0002_model_credentials.sql) 和 [0003_language_pair.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0003_language_pair.sql)，将每份 SQL 按顺序复制到控制台执行。
+- **已有旧版 jobs 表**：保留原数据库，先执行尚未应用的 0002，再执行尚未应用的 0003。先查看 `PRAGMA table_info(jobs);` 和现有迁移记录，避免重复执行 ALTER TABLE。
+- **已经应用 0002**：已有 mode / model_config 列及 credentials、job_secrets、team_services、member_policies、admissions、ai_usage、connection_probes 表，不要再次执行 0002；继续检查 0003 的新增列。
+- **多语对照的 0003 迁移**：确认 `jobs` 尚无 `language_pair` 列后，只执行一次 [0003_language_pair.sql](https://github.com/xuanxi369/HotWord/blob/main/migrations/0003_language_pair.sql)。该迁移只新增可为空的语言组合列，保留已有任务、词条及用量。已有该列则不要重复执行。
 - 若当前 Console 只支持单条 SQL，按分号结束的完整语句逐条执行；CREATE TABLE 里的逗号不能拆开。
 
 0002 不是可重复执行脚本。遇到错误应核对是哪条未完成，并补齐剩余语句，不要把 “duplicate column” 一律忽略，也不要删除原表重新开始。
+
+**应用 0003 后再发布多语对照代码。** 新版本的任务创建、近期任务及详情接口会读取 `jobs.language_pair`；缺少该列时接口会提示数据库迁移未完成，管理员诊断会列出 `jobs.language_pair`。先在 D1 Console 应用 SQL，确认 `PRAGMA table_info(jobs);` 中已有该列，再让 Workers Builds 发布新代码。
+
+0003 的完整 SQL 如下，也可从本地待发布的迁移文件复制，以便在 GitHub main 自动触发构建前应用：
+
+```sql
+ALTER TABLE jobs ADD COLUMN language_pair TEXT;
+```
 
 如果已登记 0002 但模型配置仍无法读取，必须核对实际表结构。针对已完成 jobs 新增列及前四张表、缺少 admissions / ai_usage / connection_probes 的情况，使用[部分迁移修复说明](docs/repair-model-setup.md)和专用补齐 SQL。
 
@@ -61,6 +70,10 @@ INSERT OR IGNORE INTO d1_migrations(name) VALUES ('0001_jobs.sql');
 
 ```sql
 INSERT OR IGNORE INTO d1_migrations(name) VALUES ('0002_model_credentials.sql');
+```
+
+```sql
+INSERT OR IGNORE INTO d1_migrations(name) VALUES ('0003_language_pair.sql');
 ```
 
 已由 Wrangler 应用并登记的 migration 不需要补登记。网页部署的默认命令不重复运行生产迁移；后续新增 migration 也应先在 D1 Console 应用，再发布依赖新结构的代码。
@@ -182,6 +195,8 @@ btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 - Worker → Settings → Domains & Routes：自定义域名正确，workers.dev / Preview URL 关闭。
 - Worker → Settings → Triggers：清理 cron 为每小时第 15 分钟，注意 Cloudflare cron 按 UTC 执行。
 - 未授权邮箱被 Access 拒绝；成员只能查看自己的任务和凭据。
+- 顶部“会议词库”与“多语对照”可切换，直接打开 `/multilingual` 也经过同一 Access 登录；两个页面沿用现有样式，主页面仍按原中英流程处理。
+- 多语对照可选择 18 种语言中的不同两种；分别验证单文件双语导入及单语补全，近期任务恢复保持所选语言，version 2 审核 JSON 保持语言组合和双向设置，旧 version 1 仍回到主页面恢复。
 - 五家分别完成连接、合成资料提取、错误反馈和费用归属验证，确认失败不自动换密钥。
 - 任务完成、失败或取消后，D1 的对应 job_secrets 记录应清理；删除任务不重置用量。
 - 最终 TXT 校验 `Somnia-梦境公链，Industrial Collaboration-产业协同`，热词 ≤ 2048、指定翻译 ≤ 20480 字符，包含 BOM 和 CRLF。

@@ -4,7 +4,7 @@ import type { Env } from '../../server/env';
 
 export function testEnv() {
   const sqlite = new DatabaseSync(':memory:');
-  for (const name of ['0001_jobs.sql', '0002_model_credentials.sql']) sqlite.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
+  for (const name of ['0001_jobs.sql', '0002_model_credentials.sql', '0003_language_pair.sql']) sqlite.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
   function prepare(sql: string) {
     let args: any[] = [];
     const statement = {
