@@ -2,6 +2,8 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import { JobInputSchema, type ExtractionResult } from '../shared/schema';
 import { bisectText } from '../shared/chunks';
+import { auditRows, bisectAudit } from '../shared/table-audit';
+import { auditChunk } from './table-audit';
 import { callBudget, extractChunk } from './ai';
 import { HttpError } from './auth';
 import type { Env } from './env';
@@ -24,7 +26,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
         const input = JobInputSchema.parse(await object.json());
         const job = await this.env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<ExecutionJob>();
         if (!job || !['queued', 'running'].includes(job.status)) throw new NonRetryableError('任务已取消');
-        const count = extractionChunks(input.segments, executionConfig(this.env, job).config).length;
+        const count = extractionChunks(input.segments, executionConfig(this.env, job).config, input.auditCandidates).length;
         if (!count) throw new NonRetryableError('没有可提取的文本');
         await this.env.DB.prepare("UPDATE jobs SET status='running', total=? WHERE id=? AND status='queued'").bind(count, id).run();
         return count;
@@ -42,9 +44,11 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             const job = await this.env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<ExecutionJob>();
             if (!job || !['queued', 'running'].includes(job.status)) throw new NonRetryableError('任务已取消');
             const { config, pricing } = executionConfig(this.env, job);
-            let chunk = extractionChunks(JobInputSchema.parse(await object.json()).segments, config)[i];
+            const input = JobInputSchema.parse(await object.json());
+            const split = input.auditCandidates ? bisectAudit : bisectText;
+            let chunk = extractionChunks(input.segments, config, input.auditCandidates)[i];
             for (const part of path) {
-              const pieces = bisectText(chunk.text);
+              const pieces = split(chunk.text);
               if (!pieces) throw new NonRetryableError('片段无法继续拆分，请提高输出上限');
               chunk = { ...chunk, text: pieces[part === '0' ? 0 : 1] };
             }
@@ -53,11 +57,13 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             try {
               await reserveModelCall(this.env, job, pricing, callBudget(config, chunk.text));
               const keyValue = job.mode === 'personal' ? await taskKey(this.env, id, job.owner) : teamKey(this.env, config.provider);
-              result = await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${suffix}`, usage => recordUsage(this.env, job, pricing, usage));
+              const record = (usage: Parameters<typeof recordUsage>[3]) => recordUsage(this.env, job, pricing, usage);
+              result = input.auditCandidates ? await auditChunk(this.env, config, keyValue, chunk.text, auditRows(chunk.text, input.auditCandidates), record)
+                : await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${suffix}`, record);
             } catch (e) {
               // Return only a split marker through Workflow state. Each smaller
               // part has its own timeout/retry; truncated content is never saved.
-              if (e instanceof OutputLimitError && bisectText(chunk.text)) return null;
+              if (e instanceof OutputLimitError && split(chunk.text)) return null;
               const reason = e instanceof OutputLimitError ? '最小片段仍无法完整输出，请提高模型单次输出容量或更换模型'
                 : e instanceof HttpError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试';
               // Workflow may serialize the thrown error and lose its class.

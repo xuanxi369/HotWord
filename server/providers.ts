@@ -7,7 +7,7 @@ export class ModelError extends HttpError {
   constructor(message: string, public retryable = false, public usage?: TokenUsage, status = 502) { super(status, message); }
 }
 export class OutputLimitError extends ModelError {
-  constructor(message: string, usage: TokenUsage) { super(message, false, usage); }
+  constructor(message: string, usage?: TokenUsage) { super(message, false, usage); }
 }
 export const secretNames: Partial<Record<Provider, keyof Env>> = { openai: 'OPENAI_API_KEY', claude: 'ANTHROPIC_API_KEY', deepseek: 'DEEPSEEK_API_KEY', zhipu: 'ZHIPU_API_KEY', qwen: 'QWEN_API_KEY' };
 export function teamKey(env: Env, provider: Provider): string {

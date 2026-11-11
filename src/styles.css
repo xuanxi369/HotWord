@@ -260,6 +260,17 @@ textarea.cell-input { display: block; field-sizing: content; resize: none; min-h
 .term-status.confirmed { color: #646c58; }
 .mobile-cell-label { display: none; }
 .term-toggles { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.term-toggles > div { display: grid; gap: 3px; }
+.term-toggles > div > label { display: flex; align-items: center; gap: 5px; color: #636d55; font-size: 9px; }
+.output-status { border: 0; background: none; text-align: left; color: #636d55; font-size: 9px; padding: 0 0 0 23px; cursor: pointer; }
+.output-status.limited { color: #94673b; }
+.review-context { margin: 0; padding: 10px 22px; color: #6c7464; font-size: 11px; line-height: 1.7; border-bottom: 1px solid var(--line); background: #fafbf7; }
+.risk-note { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; margin-left: 7px; color: #826b4c; border: 0; padding: 0; background: none; cursor: pointer; }
+.classification-note { font-size: 12px; color: #68735b; line-height: 1.7; }
+.output-detail { display: grid; gap: 10px; margin: 15px 0; }
+.output-detail > div { border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-size: 12px; }
+.output-detail p { margin: 6px 0 0; color: #6c7464; overflow-wrap: anywhere; line-height: 1.7; }
+.audit-button { margin-left: auto; order: 4; white-space: nowrap; }
 .term-toggles > label { display: flex; align-items: center; gap: 5px; font-size: 9px; color: #636d55; }
 .check-toggle { width: 18px; height: 18px; border-radius: 5px; border: 1px solid #d6e0c9; background: linear-gradient(#fff, #f7f9f0); color: #fff; padding: 0; display: inline-grid; place-items: center; box-shadow: 0 1px 2px #2a3a1404; flex-shrink: 0; }
 .check-toggle > span { display: grid; place-items: center; }

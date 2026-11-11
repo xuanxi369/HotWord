@@ -7,6 +7,7 @@ import { modelDefaults, type Provider } from '../shared/models';
 import { compileTranslations } from '../shared/compiler';
 import { bisectText } from '../shared/chunks';
 import type { ExtractionResult } from '../shared/schema';
+import { importTable } from '../shared/table-import';
 import { testEnv } from './support/database';
 import { NonRetryableError } from './support/workflow-runtime';
 import { recordUsage, releaseTask } from '../server/store';
@@ -39,6 +40,28 @@ async function personalJob(env: ReturnType<typeof testEnv>['env'], provider: Pro
 }
 afterEach(() => vi.unstubAllGlobals());
 describe('后台任务、清理与用量闭环', () => {
+  it('原表 AI 核对缺少 id 时逐行拆分，最终保持所有配对、选择与出处', async () => {
+    const { env, sqlite, objects } = testEnv();
+    const original = importTable([{id:'sheet',label:'双语表',text:'',rows:[['中文','英文'],['艾玛·斯通','Emma Stone'],['徐思远','Siyuan (Alex) Xu'],['青山医院','Greenhill Hospital']]}],0,1,true,true).candidates;
+    original[0].pinned=true;original[1].translation=false;
+    const c=await saveCredential(env,owner,{name:'测试',config:modelDefaults('deepseek'),apiKey:'personal-test-secret',remember:false});
+    const job=await createJob(env,owner,{name:'分类核对',segments:[{id:'s',label:'原表',text:'双语表'}],auditCandidates:original,selection:{mode:'personal',credentialId:c.id}});
+    const fetcher=vi.fn().mockImplementation(async (_url:string,init:RequestInit)=>{
+      const messages=JSON.parse(init.body as string).messages;
+      expect(messages[0].content).toContain('不得重写 source');
+      const input=messages[1].content.split('\n').map((line:string)=>JSON.parse(line));
+      const terms=input.slice(0,input.length>1 ? -1 : undefined).map((row:any)=>({id:row.id,category:row.category,priority:80,riskReason:'音译或缩写',reviewReason:'',categoryEvidence:'原表对照'}));
+      return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify({terms,complete:true})}}],usage:{prompt_tokens:10,completion_tokens:10}});
+    });
+    vi.stubGlobal('fetch',fetcher);await run(env,job.id);
+    const result=JSON.parse(objects.get(`${job.id}/result.json`)!);
+    expect(result.candidates).toHaveLength(original.length);
+    result.candidates.forEach((term:any,i:number)=>expect(term).toMatchObject(JSON.parse(JSON.stringify({...original[i],priority:80,categoryEvidence:'原表对照',riskReason:'音译或缩写'}))));
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    expect(result.warnings.join('')).toContain('自动拆小');
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+    expect(sqlite.prepare('SELECT status FROM jobs WHERE id=?').get(job.id)).toMatchObject({status:'completed'});
+  });
   for (const provider of ['openai', 'claude', 'deepseek', 'zhipu', 'qwen'] as const) it(`${provider} 完整任务结果保持指定格式，完成后清理任务密钥`, async () => {
     const { env, sqlite, objects } = testEnv(), job = await personalJob(env, provider);
     const fetcher = vi.fn().mockResolvedValue(Response.json(reply(provider))); vi.stubGlobal('fetch', fetcher);

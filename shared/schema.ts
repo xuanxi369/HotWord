@@ -4,7 +4,7 @@ import { ModelSelectionSchema, type ModelConfig } from './models';
 export const Category = z.enum(['person', 'place', 'company', 'product', 'industry', 'other']);
 export type Category = z.infer<typeof Category>;
 export const categoryNames: Record<Category, string> = {
-  person: '人名', place: '地名', company: '机构 / 公司', product: '产品 / 牌号', industry: '行业术语', other: '其他',
+  person: '人名', place: '地名', company: '机构 / 公司', product: '产品 / 药品 / 型号', industry: '行业术语', other: '其他',
 };
 export const CandidateSchema = z.object({
   id: z.string().max(120),
@@ -18,6 +18,9 @@ export const CandidateSchema = z.object({
   hot: z.boolean(),
   translation: z.boolean(),
   pinned: z.boolean(),
+  reviewReason: z.string().max(240).optional(),
+  riskReason: z.string().max(240).optional(),
+  categoryEvidence: z.string().max(240).optional(),
 });
 export type Candidate = z.infer<typeof CandidateSchema>;
 export const SegmentSchema = z.object({
@@ -29,7 +32,9 @@ export type ParsedFile = { name: string; kind: string; segments: ParsedSegment[]
 export const JobInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
   segments: z.array(SegmentSchema).min(1).max(80),
-}).refine(v => v.segments.reduce((n, s) => n + s.text.length, 0) <= 120_000, '解析文本超过 120000 字符，请分批处理');
+  auditCandidates: z.array(CandidateSchema).min(1).max(10000).optional(),
+}).refine(v => v.segments.reduce((n, s) => n + s.text.length, 0) <= 120_000, '解析文本超过 120000 字符，请分批处理')
+  .refine(v => !v.auditCandidates || v.auditCandidates.reduce((n,c)=>n+c.source.length+c.target.length+c.evidence.length+c.location.length,0)<=120_000, '核对词条超过 120000 字符，请分批处理');
 export type JobInput = z.infer<typeof JobInputSchema>;
 export const JobCreateSchema = JobInputSchema.safeExtend({ selection: ModelSelectionSchema });
 export type Job = { id: string; name: string; status: 'queued' | 'running' | 'completed' | 'failed'; progress: number; total: number; error: string | null; created_at: number;

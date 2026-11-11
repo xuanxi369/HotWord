@@ -1,6 +1,7 @@
 import { JobCreateSchema, JobInputSchema, type Job, type JobInput } from '../shared/schema';
 import { ModelConfigSchema, type ModelConfig } from '../shared/models';
 import { chunkSegments } from '../shared/chunks';
+import { auditChunks } from '../shared/table-audit';
 import { callBudget, estimatedTermsPerChunk, promptTokenReserve } from './ai';
 import { HttpError } from './auth';
 import { credentialConfig, decryptKey, encryptKey, ownedCredential, type StoredCredential } from './credentials';
@@ -20,7 +21,8 @@ export function chunkSize(config: ModelConfig) {
   if (size < 2) throw new HttpError(400, '模型上下文不足以容纳提取提示词和输出预算，请增大上下文长度或降低输出上限');
   return size;
 }
-export function extractionChunks(segments: JobInput['segments'], config: ModelConfig) {
+export function extractionChunks(segments: JobInput['segments'], config: ModelConfig, auditCandidates?: JobInput['auditCandidates']) {
+  if (auditCandidates) return auditChunks(auditCandidates, chunkSize(config), estimatedTermsPerChunk(config));
   // Reserve room for two candidates per bilingual row, including evidence.
   return chunkSegments(segments, chunkSize(config), Math.max(1, Math.floor(estimatedTermsPerChunk(config) / 2)));
 }
@@ -28,6 +30,7 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
   const parsed = JobCreateSchema.safeParse(raw);
   if (!parsed.success) throw new HttpError(400, '输入无效，请检查模型配置、名称、片段数量及 120000 字符限制');
   const { selection } = parsed.data;
+  if (parsed.data.auditCandidates && new Set(parsed.data.auditCandidates.map(c => c.id)).size !== parsed.data.auditCandidates.length) throw new HttpError(400, '分类核对词条 ID 重复');
   if (!parsed.data.segments.some(s => s.text.trim())) throw new HttpError(400, '输入没有文字');
   let config: ModelConfig, serviceName: string, pricing: Pricing = { input: null, output: null }, credential: StoredCredential | undefined, personalKey: string | undefined;
   if (selection.mode === 'team') {
@@ -36,7 +39,9 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     teamKey(env, service.config.provider);
     config = service.config; serviceName = service.name; pricing = { input: service.inputUsdPerMillion, output: service.outputUsdPerMillion };
   } else { credential = await ownedCredential(env, selection.credentialId, owner); config = credentialConfig(credential); serviceName = credential.name; personalKey = await decryptKey(env, credential, owner, credential.id); }
-  const chunks = extractionChunks(parsed.data.segments, config);
+  let chunks;
+  try { chunks = extractionChunks(parsed.data.segments, config, parsed.data.auditCandidates); }
+  catch (e) { throw new HttpError(400, (e as Error).message); }
   // Keep per-call estimates for reporting; they do not gate task admission.
   const reserve = callBudget(config, chunks[0].text);
   const reservedUsd = price(reserve, pricing), team = selection.mode === 'team';

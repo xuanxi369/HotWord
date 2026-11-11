@@ -14,7 +14,7 @@ export function normalizeTerm(value: string): string {
 export const termKey = (value: string) => normalizeTerm(value).toLocaleLowerCase('en-US');
 export const fileText = (content: string) => '\uFEFF' + content + '\r\n';
 export type Exclusion = { id: string; term: string; reason: string };
-export type Compiled = { content: string; count: number; chars: number; excluded: Exclusion[]; errors: string[]; changes: string[] };
+export type Compiled = { content: string; count: number; chars: number; included: { id: string; term: string; reused: boolean }[]; excluded: Exclusion[]; errors: string[]; changes: string[] };
 type Entry = { id: string; term: string; key: string; pinned: boolean; rank: number };
 const weights = { person: 500, place: 400, company: 300, product: 200, industry: 100, other: 0 };
 
@@ -22,20 +22,22 @@ function pack(entries: Entry[], limit: number, excluded: Exclusion[], changes: s
   const sorted = entries.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.rank - a.rank || a.key.localeCompare(b.key, 'en'));
   const seen = new Set<string>();
   const accepted: string[] = [];
+  const included: Compiled['included'] = [];
   let chars = FILE_OVERHEAD;
   const errors: string[] = [];
   for (const entry of sorted) {
-    if (seen.has(entry.key)) { excluded.push({ id: entry.id, term: entry.term, reason: '重复条目' }); continue; }
-    seen.add(entry.key);
+    if (seen.has(entry.key)) { included.push({ id: entry.id, term: entry.term, reused: true }); continue; }
     const cost = entry.term.length + Number(accepted.length > 0);
     if (chars + cost > limit) {
       excluded.push({ id: entry.id, term: entry.term, reason: entry.pinned ? '必保条目超出上限' : '字符预算不足，保留了更高优先级的完整条目' });
       if (entry.pinned) errors.push('必保条目超过字符上限，请减少必保项后下载');
       continue;
     }
+    seen.add(entry.key);
+    included.push({ id: entry.id, term: entry.term, reused: false });
     accepted.push(entry.term); chars += cost;
   }
-  return { content: accepted.join('，'), count: accepted.length, chars, excluded, errors: [...new Set(errors)], changes: [...new Set(changes)] };
+  return { content: accepted.join('，'), count: accepted.length, chars, included, excluded, errors: [...new Set(errors)], changes: [...new Set(changes)] };
 }
 
 export function compileHotwords(candidates: Candidate[]): Compiled {

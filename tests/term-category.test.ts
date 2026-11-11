@@ -7,6 +7,30 @@ import type { ParsedSegment } from '../shared/schema';
 const table = (rows: string[][], label = '通用'): ParsedSegment => ({ id: 'mixed', label, rows, text: rows.map(row => row.join('\t')).join('\n') });
 
 describe('通用双语表的人名分类', () => {
+  it('连续外籍名单不依赖邻近机构，支持中间名与括号别名', () => {
+    const rows = [['中文', '英文'], ['艾玛·斯通', 'Emma Stone'], ['索菲亚·马丁', 'Sophia Martin'], ['奥利弗·威尔逊', 'Oliver J. Wilson'], ['徐思远', 'Siyuan (Alex) Xu'], ['杨雨宁', 'Yang Yuning']];
+    expect(importTable([table(rows)], 0, 1, true, true).candidates.map(c => c.category)).toEqual(Array(5).fill('person'));
+  });
+  it('包含人名的机构、奖项和连字符化学名称不能当作人名', () => {
+    for (const [source, target, expected] of [
+      ['艾玛·斯通癌症中心', 'Emma Stone Cancer Centre', 'company'],
+      ['思远制药', 'SY (Smith & Co.)', 'company'],
+      ['Alex Smith 新星奖', 'Alex Smith Rising Star Award', 'other'],
+      ['丙烯腈-丁二烯-苯乙烯', 'Acrylonitrile Butadiene Styrene', 'industry'],
+      ['研究者发起的临床试验', 'Investigator-Initiated Trial (IIT)', 'industry'],
+      ['抗体偶联药物', 'ADC', 'industry'],
+    ]) expect(inferTermCategory({ source, target })).toBe(expected);
+  });
+  it('继承合并分类标题，忽略说明中列举的分类，不把类别标题当热词', () => {
+    const result = importTable([table([['中文','英文'], ['人名',''], ['任雨宁','Yuning Ren'], ['索菲亚·马丁','Sophia Martin'], ['地名',''], ['石桥','Stonebridge'], ['机构',''], ['青山医院','Greenhill Hospital'], ['行业术语',''], ['王水','Aqua Regia']])],0,1,true,true);
+    expect(result.candidates.map(c=>c.category)).toEqual(['person','person','place','company','industry']);
+    expect(result.candidates).toHaveLength(5);
+    expect(inferTermCategory({source:'抗体偶联药物',target:'ADC',context:['人名、地名、行业术语']})).toBe('industry');
+  });
+  it('每张表保留原有翻译方向，不把英译中表倒置产生伪冲突', () => {
+    const result = importTable([table([['中文','英文'],['徐思远','Siyuan Xu']], '中译英'), {...table([['英文','中文'],['Siyuan Xu','徐思远']], '英译中'),id:'reverse'}],0,1,true,true);
+    expect(result.candidates.map(c=>[c.source,c.target])).toEqual([['徐思远','Siyuan Xu'],['Siyuan Xu','徐思远']]);
+  });
   it('人名、机构和职务混排时保留完整人名并分类，而不是把整张表归为人名', () => {
     const segment = table([
       ['中文', '英文', '备注'],

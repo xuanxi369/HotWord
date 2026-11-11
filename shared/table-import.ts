@@ -1,7 +1,8 @@
 import { termKey } from './compiler';
 import type { Candidate, ParsedSegment } from './schema';
 import { termIssue } from './term-quality';
-import { inferTermCategory } from './term-category';
+import { categoryFromLabel, inferTermCategory } from './term-category';
+import { termRisk } from './review';
 
 export type TableColumns = { sourceColumn: number; targetColumn: number; headerRow: number };
 const headerKey = (value: string) => value.normalize('NFKC').replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -11,7 +12,13 @@ export function detectTableColumns(segment: ParsedSegment): TableColumns | undef
   for (const [headerRow, row] of (segment.rows ?? []).slice(0, 10).entries()) {
     const keys = row.map(headerKey);
     const sourceColumn = keys.findIndex(k => sourceHeaders.test(k)), targetColumn = keys.findIndex(k => targetHeaders.test(k));
-    if (sourceColumn >= 0 && targetColumn >= 0 && sourceColumn !== targetColumn) return { sourceColumn, targetColumn, headerRow };
+    if (sourceColumn >= 0 && targetColumn >= 0 && sourceColumn !== targetColumn) {
+      // Language-only headers describe the workbook's left-to-right translation direction.
+      // Never turn an English-to-Chinese sheet into Chinese-to-English mappings.
+      const language = /^(?:中文(?:术语|词条|姓名)?|英文(?:首选译法|译法|术语|姓名)?|chinese(?: term| name)?|english(?: term| name)?)$/i;
+      if (language.test(keys[sourceColumn]) && language.test(keys[targetColumn])) return { sourceColumn: Math.min(sourceColumn, targetColumn), targetColumn: Math.max(sourceColumn, targetColumn), headerRow };
+      return { sourceColumn, targetColumn, headerRow };
+    }
   }
 }
 
@@ -38,9 +45,12 @@ export function importTable(segments: ParsedSegment[], sourceColumn: number, tar
     const sourceIndex = detected?.sourceColumn ?? sourceColumn, targetIndex = detected?.targetColumn ?? targetColumn;
     if (sourceIndex === targetIndex) { warnings.push(`${segment.label}：原词和译文列不能相同`); continue; }
     const rows = segment.rows ?? [];
+    let section = '';
     rows.forEach((row, index) => {
       if (skipHeader && index <= (detected?.headerRow ?? 0)) return;
       const source = (row[sourceIndex] ?? '').trim(); let target = (row[targetIndex] ?? '').trim();
+      const sectionLabel = row.filter(v => v.trim());
+      if (sectionLabel.length === 1 && categoryFromLabel(sectionLabel[0])) { section = sectionLabel[0]; return; }
       if (!source && !target) return;
       const actualSource = source || target;
       if (actualSource.length > 180 || target.length > 180) { warnings.push(`${segment.label} 第 ${index + 1} 行过长，请检查所选列`); return; }
@@ -54,11 +64,17 @@ export function importTable(segments: ParsedSegment[], sourceColumn: number, tar
       seen.add(key);
       const ambiguous = /[/／]/.test(actualSource + target);
       if (ambiguous) warnings.push(`${segment.label} 第 ${index + 1} 行含斜杠别称，请拆成完整词组后确认指定翻译`);
-      const context = [segment.label, ...row.filter((_, i) => i !== sourceIndex && i !== targetIndex), ...(header ? [rows[header.headerRow][sourceIndex] ?? '', rows[header.headerRow][targetIndex] ?? ''] : [])];
+      const context = [...row.filter((_, i) => i !== sourceIndex && i !== targetIndex), section, segment.label, ...(header ? [rows[header.headerRow][sourceIndex] ?? '', rows[header.headerRow][targetIndex] ?? ''] : [])];
       const neighbors = rows.slice(Math.max(0, index - 2), index + 3).filter(neighbor => neighbor !== row).map(neighbor => ({ source: neighbor[sourceIndex] ?? '', target: neighbor[targetIndex] ?? '' }));
       const category = inferTermCategory({ source: actualSource, target, context, neighbors });
+      const explicit = context.find(value => categoryFromLabel(value) === category);
+      const declared = context.map(categoryFromLabel).find(Boolean);
+      const unclearName = category === 'industry' && (/^\p{Script=Han}{2,5}$/u.test(actualSource) && /^[A-Z][a-z]+$/.test(target) || /^[A-Z][a-z]+(?:\s+[A-Z][\p{L}.]+){1,4}$/u.test(actualSource) && !target);
       candidates.push({ id: `table-${segment.id}-${index}`, source: actualSource, target: source ? target : '', category,
         priority: 70, basis: 'source', evidence: row.filter(Boolean).join(' | ').slice(0, 400),
+        categoryEvidence: explicit ? `原表分类：${explicit}` : '根据原词、对照译文和邻近行识别',
+        riskReason: termRisk(actualSource, target, category),
+        reviewReason: declared && declared !== category ? '原表分类与机构或职务证据不一致，请核对类别' : unclearName ? '专名类别不明确，建议用 AI 分类核对' : undefined,
         location: `${segment.label} · 第 ${index + 1} 行`, hot: true, translation: Boolean(source && target && !ambiguous), pinned: false });
     });
   }
