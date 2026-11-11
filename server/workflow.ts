@@ -9,6 +9,10 @@ import { taskKey } from './credentials';
 import { ModelError, teamKey } from './providers';
 import { deleteObjects, recordUsage, releaseTask } from './store';
 
+function failureMessage(reason: string) {
+  return `提取失败：${reason.replace(/。+$/, '')}。未生成可下载的完整结果；可重新配置、重试或手动切换服务。`;
+}
+
 export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> {
   async run(event: WorkflowEvent<{ id: string }>, step: WorkflowStep) {
     const id = event.payload.id;
@@ -40,12 +44,16 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
               const keyValue = job.mode === 'personal' ? await taskKey(this.env, id, job.owner) : teamKey(this.env, config.provider);
               result = await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${i}`, usage => recordUsage(this.env, job, pricing, usage));
             } catch (e) {
+              const reason = e instanceof ModelError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试';
+              // Workflow may serialize the thrown error and lose its class.
+              // Persist only our safe message before it crosses that boundary.
+              await this.env.DB.prepare('UPDATE jobs SET error=? WHERE id=?').bind(failureMessage(reason), id).run();
               if (e instanceof ModelError && e.retryable) throw e;
-              throw new NonRetryableError(e instanceof ModelError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试');
+              throw new NonRetryableError(reason);
             }
             await this.env.FILES.put(key, JSON.stringify(result));
           }
-          await this.env.DB.prepare('UPDATE jobs SET progress=? WHERE id=?').bind(i + 1, id).run();
+          await this.env.DB.prepare('UPDATE jobs SET progress=?,error=NULL WHERE id=?').bind(i + 1, id).run();
           return key;
         });
       }
@@ -70,7 +78,8 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
       await step.do('mark-failed', async () => {
         await releaseTask(this.env, id);
         const reason = e instanceof ModelError || e instanceof NonRetryableError ? e.message : '模型调用或后台处理失败，请检查额度与配置后重试';
-        await this.env.DB.prepare("UPDATE jobs SET status='failed', error=? WHERE id=?").bind(`提取失败：${reason}。未生成可下载的完整结果；可重新配置、重试或手动切换服务。`, id).run();
+        const saved = await this.env.DB.prepare('SELECT error FROM jobs WHERE id=?').bind(id).first<{ error: string | null }>();
+        await this.env.DB.prepare("UPDATE jobs SET status='failed', error=? WHERE id=?").bind(saved?.error || failureMessage(reason), id).run();
         await deleteObjects(this.env, id);
         return false;
       });

@@ -88,8 +88,14 @@ export async function invokeModel(env: Env, c: ModelConfig, key: string, system:
     if (c.provider === 'claude') { headers['x-api-key'] = key; headers['anthropic-version'] = '2023-06-01'; if (c.workspace) headers['anthropic-workspace-id'] = c.workspace; }
     else headers.Authorization = `Bearer ${key}`;
     let response: Response;
-    try { response = await fetch(endpoint(c), { method: 'POST', headers, body: JSON.stringify(buildRequest(c, system, text, schema, probe)), redirect: 'error', signal: AbortSignal.timeout(120000) }); }
+    // Workers supports only follow/manual. Inspect redirects explicitly instead
+    // of using Node's "error" mode, which throws before the request is sent.
+    try { response = await fetch(endpoint(c), { method: 'POST', headers, body: JSON.stringify(buildRequest(c, system, text, schema, probe)), redirect: 'manual', signal: AbortSignal.timeout(120000) }); }
     catch { throw new ModelError('模型连接超时或网络异常，请重试。未切换使用模式或密钥。', true, fallback); }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new ModelError('服务商接口返回重定向，已停止请求，请检查服务商接口配置', false, { input: 0, output: 0, estimated: false });
+    }
     if (!response.ok) {
       await response.body?.cancel();
       const messages: Record<number, string> = { 400: '模型参数或工作空间不匹配，请检查模型能力、区域和工作空间', 401: 'API Key 无效或已过期，请重新配置',

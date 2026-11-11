@@ -19,7 +19,7 @@ describe('五家服务原生协议与共同提取规则', () => {
     const result = await extractChunk({} as Env, config, 'personal-test-key', text, '测试资料', 't', record);
     expect(result.candidates.map(c => c.target)).toEqual(['梦境公链', '产业协同']);
     expect(record).toHaveBeenCalledWith({ input: 100, output: 80, estimated: false });
-    const [url, init] = fetcher.mock.calls[0]; expect(url).toBe(endpoint(config)); expect(init.redirect).toBe('error');
+    const [url, init] = fetcher.mock.calls[0]; expect(url).toBe(endpoint(config)); expect(init.redirect).toBe('manual');
     const body = JSON.parse(init.body); expect(body.model).toBe(config.model);
     if (provider === 'openai') { expect(body.text.format.type).toBe('json_schema'); expect(body.store).toBe(false); expect(body).not.toHaveProperty('messages'); }
     else if (provider === 'claude') { expect(init.headers['x-api-key']).toBe('personal-test-key'); expect(init.headers['anthropic-version']).toBe('2023-06-01'); expect(body.system).toContain('原文'); }
@@ -46,6 +46,14 @@ describe('五家服务原生协议与共同提取规则', () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('secret-test-key sensitive provider detail', { status: 401 })); vi.stubGlobal('fetch', fetcher);
     const record = vi.fn();
     await expect(extractChunk({} as Env, modelDefaults('openai'), 'secret-test-key', text, 'x', 'x', record)).rejects.toMatchObject({ retryable: false, message: 'API Key 无效或已过期，请重新配置' });
+    expect(fetcher).toHaveBeenCalledTimes(1); expect(record).toHaveBeenCalledWith({ input: 0, output: 0, estimated: false });
+  });
+  it('拒绝服务商重定向，不发送第二次请求或暴露响应内容', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('private-provider-detail', { status: 307, headers: { Location: 'https://other.example/' } }));
+    vi.stubGlobal('fetch', fetcher); const record = vi.fn();
+    await expect(extractChunk({} as Env, modelDefaults('deepseek'), 'secret-test-key', text, 'x', 'x', record)).rejects.toMatchObject({
+      retryable: false, message: '服务商接口返回重定向，已停止请求，请检查服务商接口配置',
+    });
     expect(fetcher).toHaveBeenCalledTimes(1); expect(record).toHaveBeenCalledWith({ input: 0, output: 0, estimated: false });
   });
   it('不完整、拒绝、失效 JSON 都拒绝且保留已消耗用量', async () => {

@@ -18,13 +18,13 @@ function reply(provider: Provider) {
   return { choices: [{ finish_reason: 'stop', message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 80 } };
 }
 const owner = 'member@example.com';
-async function run(env: ReturnType<typeof testEnv>['env'], id: string) {
+async function run(env: ReturnType<typeof testEnv>['env'], id: string, wrapErrors = false) {
   const durableValues: unknown[] = [];
   const step = { async do(_name: string, options: any, work?: () => Promise<unknown>) {
     const fn = work ?? options, retries = work ? options.retries?.limit ?? 0 : 0;
     for (let attempt = 0; ; attempt++) {
       try { const value = await fn(); durableValues.push(value); return value; }
-      catch (e) { if (e instanceof NonRetryableError || attempt >= retries) throw e; }
+      catch (e) { if (e instanceof NonRetryableError || attempt >= retries) throw wrapErrors ? new Error('Workflow step failed') : e; }
     }
   } };
   await new ExtractionWorkflow({} as ExecutionContext, env).run({ payload: { id } } as any, step as any);
@@ -60,7 +60,7 @@ describe('后台任务、清理与用量闭环', () => {
   it('401 失败没有自动切换或重试，清理个人密钥且给出明确错误', async () => {
     const { env, sqlite, objects } = testEnv(), job = await personalJob(env);
     const fetcher = vi.fn().mockResolvedValue(new Response('provider-private-detail personal-test-secret', { status: 401 })); vi.stubGlobal('fetch', fetcher);
-    await expect(run(env, job.id)).rejects.toThrow(); expect(fetcher).toHaveBeenCalledTimes(1);
+    await expect(run(env, job.id, true)).rejects.toThrow(); expect(fetcher).toHaveBeenCalledTimes(1);
     const record = sqlite.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id);
     expect(record?.status).toBe('failed'); expect(record?.error).toContain('API Key 无效'); expect(record?.error).not.toContain('personal-test-secret');
     expect([...objects.keys()]).toHaveLength(0); await expect(taskKey(env, job.id, owner)).rejects.toThrow();
@@ -69,8 +69,20 @@ describe('后台任务、清理与用量闭环', () => {
     const { env, sqlite } = testEnv(), job = await personalJob(env);
     const fetcher = vi.fn().mockRejectedValueOnce(new Error('network private data')).mockResolvedValueOnce(Response.json(reply('openai'))); vi.stubGlobal('fetch', fetcher);
     await run(env, job.id); expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(sqlite.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', error: null });
     expect(sqlite.prepare('SELECT COUNT(*) AS n,SUM(estimated) AS estimated FROM ai_usage WHERE mode=?').get('personal')).toMatchObject({ n: 2, estimated: 1 });
     expect(sqlite.prepare('SELECT COUNT(*) AS n FROM ai_usage WHERE mode=?').get('team')?.n).toBe(0);
+  });
+  it('重试耗尽后仍保留具体模型错误，即使 Workflow 包装了异常', async () => {
+    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek');
+    const fetcher = vi.fn().mockRejectedValue(new Error('private-network-detail')); vi.stubGlobal('fetch', fetcher);
+    await expect(run(env, job.id, true)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const saved = sqlite.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id);
+    expect(saved?.status).toBe('failed'); expect(saved?.error).toContain('模型连接超时或网络异常');
+    expect(saved?.error).not.toContain('private-network-detail'); expect(saved?.error).not.toContain('Workflow step failed');
+    expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
+    expect([...objects.keys()]).toHaveLength(0);
   });
   it('一个片段成功、另一个截断时整项失败，不留下部分结果或密钥', async () => {
     const { env, objects, sqlite } = testEnv(), job = await personalJob(env, 'openai', [{ id: 'p', label: '第一页', text }, { id: 'q', label: '第二页', text: '字'.repeat(10000) }]);
