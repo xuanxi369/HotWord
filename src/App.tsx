@@ -5,7 +5,8 @@ import { ArrowLeft, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight
 import { api } from './api';
 import { CandidateSchema, categoryNames, type Candidate, type Category, type ExtractionResult, type Job, type ParsedFile } from '../shared/schema';
 import { compileHotwords, compileTranslations, fileText, validateExport, type Compiled } from '../shared/compiler';
-import { importTable } from '../shared/table-import';
+import { detectTableColumns, importTable, recommendTableImport } from '../shared/table-import';
+import { termIssue } from '../shared/term-quality';
 import { AnimatedNumber, ConfirmDialog, Disclosure, OverlayPanel, PrioritySlider, Segmented, Switch, Tip, Toggle, spring } from './components/ui';
 import { ModelPanel } from './components/ModelSettings';
 import { providerNames, type ModelSelection, type ModelSettings } from '../shared/models';
@@ -43,6 +44,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]), [activeJob, setActiveJob] = useState<Job>();
   const [sourceColumn, setSourceColumn] = useState(0), [targetColumn, setTargetColumn] = useState(1);
+  const [automaticColumns, setAutomaticColumns] = useState(false), [tableNote, setTableNote] = useState('');
   const [skipHeader, setSkipHeader] = useState(true), [bidirectional, setBidirectional] = useState(false);
   const [query, setQuery] = useState(''), [category, setCategory] = useState('all');
   const [view, setView] = useState<'all' | 'review' | 'excluded'>('all');
@@ -64,11 +66,16 @@ export default function App() {
   const chars = segments.reduce((n, s) => n + s.text.length, 0);
   const tableMode = !!parsed?.segments.some(s => s.rows);
   const directMode = processing === 'table' && tableMode;
+  const tableMappings = segments.filter(s => s.rows).map(segment => {
+    const detected = automaticColumns ? detectTableColumns(segment) : undefined;
+    return { segment, sourceIndex: detected?.sourceColumn ?? sourceColumn, targetIndex: detected?.targetColumn ?? targetColumn, headerRow: detected?.headerRow ?? 0 };
+  });
   const columns = Math.max(2, ...(parsed?.segments ?? []).flatMap(s => s.rows?.slice(0, 10).map(r => r.length) ?? []));
   const hot = useMemo(() => compileHotwords(candidates), [candidates]);
   const translations = useMemo(() => compileTranslations(candidates, bidirectional), [candidates, bidirectional]);
   const excluded = [...hot.excluded, ...translations.excluded];
   const excludedIds = new Set(excluded.map(e => e.id));
+  const junkCount = candidates.filter(c => termIssue(c.source) || (c.target && termIssue(c.target))).length;
   const needsReview = (c: Candidate) => (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target);
   const edited = candidates.find(c => c.id === editingTerm);
   const pendingCount = candidates.filter(c => c.target.trim() && !c.translation && c.hot).length;
@@ -146,7 +153,11 @@ export default function App() {
       window.clearTimeout(timeout); worker.terminate(); setBusy(false);
       if (!event.data.ok || !event.data.file) { setError(event.data.error || '读取失败'); return; }
       const result = event.data.file;
-      setParsed(result); setSelected(result.segments.filter(s => s.text.trim()).map(s => s.id));
+      setParsed(result);
+      const recommendation = result.segments.some(s => s.rows) ? recommendTableImport(result.segments) : undefined;
+      setSelected(recommendation?.selected ?? result.segments.filter(s => s.text.trim()).map(s => s.id));
+      setAutomaticColumns(recommendation?.automatic ?? false); setTableNote(recommendation?.note ?? '');
+      setSourceColumn(recommendation?.sourceColumn ?? 0); setTargetColumn(recommendation?.targetColumn ?? 1); setSkipHeader(recommendation?.skipHeader ?? true);
       setProcessing(result.segments.some(s => s.rows) ? 'table' : 'ai'); setRangeOpen(false);
       setName(file.name.replace(/\.[^.]+$/, '').slice(0, 100)); setWarnings(result.warnings);
       setCandidates([]); setActiveJob(undefined); setExample(false); setReviewReady(false); setSourceOpen(false); resetFilters();
@@ -157,9 +168,9 @@ export default function App() {
   }
   function directImport() {
     setError('');
-    if (sourceColumn === targetColumn) { setError('原词列和译文列不能相同'); return; }
-    const result = importTable(segments, sourceColumn, targetColumn, skipHeader);
-    if (!result.candidates.length) { setError('所选工作表及列中没有可导入的词条'); return; }
+    if (!automaticColumns && sourceColumn === targetColumn) { setError('原词列和译文列不能相同'); return; }
+    const result = importTable(segments, sourceColumn, targetColumn, skipHeader, automaticColumns);
+    if (!result.candidates.length) { setError('所选列中没有有效术语，请核对原词列与译文列；序号、说明和占位内容不会导入。'); return; }
     ready(result.candidates, [...(parsed?.warnings ?? []), ...result.warnings]); notify(`已导入 ${result.candidates.length} 条完整词条`);
   }
   async function extract() {
@@ -264,7 +275,7 @@ export default function App() {
                   <Disclosure title="查看所选原文" open={sourceOpen} onToggle={() => setSourceOpen(!sourceOpen)}><pre className="source-preview">{segments.map(s => `[${s.label}]\n${s.text}`).join('\n\n')}</pre></Disclosure>
                 </Disclosure>
                 <div className="processing-area">{tableMode ? <Segmented value={processing} label="资料整理方式" options={[{ value: 'table', label: '沿用原表译法' }, { value: 'ai', label: 'AI 提取词条' }]} onChange={setProcessing}/> : <span className="processing-label"><Sparkles size={16}/>AI 提取词条</span>}
-                  {directMode ? <div className="table-options"><p>选择原词与译文所在列，保留表里的完整配对。</p><div className="table-controls"><label>原词列<select aria-label="原词列" value={sourceColumn} onChange={e => setSourceColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><ArrowRight size={16}/><label>译文列<select aria-label="译文列" value={targetColumn} onChange={e => setTargetColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><Switch checked={skipHeader} onChange={setSkipHeader} label="跳过首行"/></div><div className="table-sample">{segments.filter(s => s.rows).slice(0, 1).map(s => <div key={s.id}><small>前两行预览</small>{s.rows!.slice(0, 2).map((r, i) => <div className="sample-pair" key={i}><span>{r[sourceColumn] || '（空）'}</span><ArrowRight size={12}/><span>{r[targetColumn] || '（空）'}</span></div>)}</div>)}</div></div> : <div className="ai-choice"><p>识别人名、地名、机构和行业术语，生成候选译法。</p><button className={`model-summary ${!modelReady ? 'unready' : ''}`} onClick={() => setModelOpen(true)}><span className="model-summary-icon"><Sparkles size={15}/></span><span><b>{modelsLoading ? '正在读取 AI 配置…' : selectedModel || '选择 AI 服务'}</b><small>{modelsError ? '打开设置，重新读取配置' : modelReady ? '当前服务已就绪' : '设置完成后即可开始'}</small></span><Settings2 size={16}/></button></div>}
+                  {directMode ? <div className="table-options"><p>{tableNote}</p><div className="table-controls"><Switch checked={automaticColumns} onChange={setAutomaticColumns} label="自动识别术语列"/><Switch checked={skipHeader} onChange={setSkipHeader} label="跳过表头"/>{!automaticColumns && <><label>原词列<select aria-label="原词列" value={sourceColumn} onChange={e => setSourceColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label><ArrowRight size={16}/><label>译文列<select aria-label="译文列" value={targetColumn} onChange={e => setTargetColumn(Number(e.target.value))}>{Array.from({ length: columns }, (_, i) => <option key={i} value={i}>{letter(i)} 列</option>)}</select></label></>}</div>{automaticColumns && <div className="table-column-map">{tableMappings.map(m => <span key={m.segment.id}>{m.segment.label}<b>{letter(m.sourceIndex)} 列原词<ArrowRight size={11}/>{letter(m.targetIndex)} 列译文</b></span>)}</div>}<div className="table-sample">{tableMappings.slice(0, 1).map(m => <div key={m.segment.id}><small>词条预览</small>{m.segment.rows!.slice(skipHeader ? m.headerRow + 1 : 0, (skipHeader ? m.headerRow + 1 : 0) + 2).map((r, i) => <div className="sample-pair" key={i}><span>{r[m.sourceIndex] || '（空）'}</span><ArrowRight size={12}/><span>{r[m.targetIndex] || '（空）'}</span></div>)}</div>)}</div></div> : <div className="ai-choice"><p>识别人名、地名、机构和行业术语，生成候选译法。</p><button className={`model-summary ${!modelReady ? 'unready' : ''}`} onClick={() => setModelOpen(true)}><span className="model-summary-icon"><Sparkles size={15}/></span><span><b>{modelsLoading ? '正在读取 AI 配置…' : selectedModel || '选择 AI 服务'}</b><small>{modelsError ? '打开设置，重新读取配置' : modelReady ? '当前服务已就绪' : '设置完成后即可开始'}</small></span><Settings2 size={16}/></button></div>}
                 </div>
                 <div className="stage-actions"><span>{!chars ? '请先选择至少一项有文字的内容' : directMode ? '直接导入，无需调用 AI' : chars > 120000 ? '内容超过 120,000 字，请减少所选范围' : !name.trim() ? '请填写词库名称' : !user ? '正在验证登录状态' : !modelReady ? '请先选择可用的 AI 服务' : '提取完成后，进入人工核对'}{chars > 120000 && !directMode && <button className="text-button" onClick={() => setRangeOpen(true)}>选择范围</button>}</span><motion.button className="button primary" whileTap={{ scale: .98 }} disabled={busy || running || !chars || (!directMode && (!user || !modelReady || !name.trim() || chars > 120000))} onClick={directMode ? directImport : extract}>{busy ? <LoaderCircle className="spin" size={16}/> : directMode ? <FileCheck2 size={16}/> : <Sparkles size={16}/>}<span>{directMode ? '导入并核对' : '开始提取'}</span><ArrowRight size={16}/></motion.button></div>
               </>}
@@ -287,6 +298,7 @@ export default function App() {
               <div className="stage-actions floating-actions"><button className="text-button" onClick={() => goTo(1)}><ArrowLeft size={14}/>返回资料</button><span className="action-hint">{pendingCount ? `${pendingCount} 个译法待确认，确认后才会导出` : '勾选“指定翻译”，即可确认译法'}</span><motion.button className="button primary" disabled={!candidates.length} onClick={() => goTo(3)} whileTap={{ scale: .98 }}>预览并导出<ArrowRight size={16}/></motion.button></div>
             </section>}
             {stage === 3 && reviewReady && <section className="export-section" aria-label="下载词库"><div className="section-title"><div><span className="small-kicker">{name || '会议词库'}</span><h2 ref={stageFocus} tabIndex={-1}>{hot.errors.length || translations.errors.length ? '再调整一下，就可以带走。' : '你的会议词库，准备好了。'}</h2></div><Switch checked={bidirectional} onChange={setBidirectional} label="生成双向映射"/></div>
+              {junkCount > 0 && <div className="export-notice"><ShieldCheck size={15}/><span>已隔离 {junkCount} 个含编号、说明或占位内容的词条。</span><button className="text-button" onClick={() => { setView('excluded'); goTo(2); }}>查看未纳入项<ArrowLeft size={12}/></button></div>}
               {pendingCount > 0 && <div className="export-notice"><CircleHelp size={15}/><span>{pendingCount} 个尚未确认的译法不会导出。</span><button className="text-button" onClick={() => goTo(2)}>返回核对<ArrowLeft size={12}/></button></div>}
               <div className="export-grid"><ExportCard kind="hot" title="热词清单" description="帮助翻译工具准确识别专有名词" compiled={hot} limit={2048} onDownload={() => exportTxt('hot', hot)} onCopy={() => exportTxt('hot', hot, true)}/><ExportCard kind="translation" title="指定翻译" description="让同一个词，始终使用同一种译法" compiled={translations} limit={20480} onDownload={() => exportTxt('translation', translations)} onCopy={() => exportTxt('translation', translations, true)}/></div>
               <div className="save-review"><span><ShieldCheck size={14}/>已按导入格式整理，保留完整词组。</span><button className="text-button" onClick={() => setHelpOpen(true)}>查看格式规则<ArrowRight size={12}/></button></div>

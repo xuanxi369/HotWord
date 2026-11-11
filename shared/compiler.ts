@@ -1,4 +1,5 @@
 import type { Candidate } from './schema';
+import { termIssue } from './term-quality';
 
 export const HOT_LIMIT = 2048;
 export const TRANSLATION_LIMIT = 20480;
@@ -38,25 +39,45 @@ function pack(entries: Entry[], limit: number, excluded: Exclusion[], changes: s
 }
 
 export function compileHotwords(candidates: Candidate[]): Compiled {
-  const entries: Entry[] = [], excluded: Exclusion[] = [], changes: string[] = [];
+  const entries: Entry[] = [], excluded: Exclusion[] = [], changes: string[] = [], qualityErrors: string[] = [];
   for (const c of candidates.filter(c => c.hot)) {
+    const sourceIssue = termIssue(c.source);
+    if (sourceIssue) {
+      excluded.push({ id: c.id, term: c.source, reason: sourceIssue });
+      if (c.pinned) qualityErrors.push('必保项包含非术语内容，请修正或取消必保');
+      continue;
+    }
     // Both languages are complete hotword entries; no split on spaces or slash.
     for (const raw of [c.source, c.basis !== 'suggested' || c.translation ? c.target : ''].filter(Boolean)) {
+      const issue = termIssue(raw);
+      if (issue) {
+        excluded.push({ id: c.id, term: raw, reason: issue });
+        if (c.pinned) qualityErrors.push('必保项包含非术语内容，请修正或取消必保');
+        continue;
+      }
       const term = normalizeTerm(raw);
       if (!term) { excluded.push({ id: c.id, term: raw, reason: '空词条' }); continue; }
       if (term !== raw) changes.push(`${raw} → ${term}`);
       entries.push({ id: c.id, term, key: termKey(term), pinned: c.pinned, rank: weights[c.category] + c.priority });
     }
   }
-  return pack(entries, HOT_LIMIT, excluded, changes);
+  const result = pack(entries, HOT_LIMIT, excluded, changes);
+  result.errors.push(...new Set(qualityErrors));
+  return result;
 }
 
 export function compileTranslations(candidates: Candidate[], bidirectional = false): Compiled {
   const proposed: (Entry & { sourceKey: string; targetKey: string })[] = [];
-  const excluded: Exclusion[] = [], changes: string[] = [];
+  const excluded: Exclusion[] = [], changes: string[] = [], qualityErrors: string[] = [];
   for (const c of candidates.filter(c => c.translation)) {
     const source = normalizeTerm(c.source), target = normalizeTerm(c.target);
     if (!source || !target) { excluded.push({ id: c.id, term: c.source, reason: '缺少原词或译文' }); continue; }
+    const issue = termIssue(c.source) || termIssue(c.target);
+    if (issue) {
+      excluded.push({ id: c.id, term: c.source, reason: issue });
+      if (c.pinned) qualityErrors.push('必保指定翻译包含非术语内容，请修正或取消必保');
+      continue;
+    }
     if (source !== c.source) changes.push(`${c.source} → ${source}`);
     if (target !== c.target) changes.push(`${c.target} → ${target}`);
     if (termKey(source) === termKey(target)) { excluded.push({ id: c.id, term: source, reason: '两端相同，无需锁定翻译' }); continue; }
@@ -76,6 +97,7 @@ export function compileTranslations(candidates: Candidate[], bidirectional = fal
     return true;
   });
   const result = pack(entries, TRANSLATION_LIMIT, excluded, changes);
+  result.errors.push(...new Set(qualityErrors));
   if (proposed.some(p => p.pinned && targets.get(p.sourceKey)!.size > 1)) result.errors.push('必保指定翻译存在冲突，请先解决');
   validateExport(result.content, 'translation');
   return result;
@@ -89,5 +111,9 @@ export function validateExport(content: string, kind: 'hot' | 'translation') {
   for (const t of content ? content.split('，') : []) {
     if (kind === 'translation' && (t.split('-').length !== 2 || t.split('-').some(p => !p.trim()))) throw new Error('指定翻译必须为原词-译文');
     if (kind === 'hot' && /[\p{Pd}\u2212]/u.test(t)) throw new Error('热词内包含映射符');
+    for (const term of kind === 'hot' ? [t] : t.split('-')) {
+      const issue = termIssue(term);
+      if (issue) throw new Error(`导出包含非术语内容：${issue}`);
+    }
   }
 }

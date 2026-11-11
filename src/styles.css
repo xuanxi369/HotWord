@@ -202,6 +202,9 @@ h2 { margin: 6px 0 0; font-size: 19px; font-weight: 550; line-height: 1.5; lette
 .table-controls > label { display: flex; align-items: center; gap: 9px; font-size: 12px; color: #636d51; }
 .table-controls select { min-width: 78px; font-size: 12px; padding: 8px 12px; }
 .table-controls .switch-control { margin-left: auto; }
+.table-column-map { display: grid; gap: 7px; margin-top: 15px; max-height: 150px; overflow: auto; }
+.table-column-map > span { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; color: #69775b; }
+.table-column-map b { display: inline-flex; gap: 5px; align-items: center; font-weight: 500; white-space: nowrap; }
 .table-sample { padding: 13px 15px; border: 1px solid #e9ecdf; background: #f9fbf5; border-radius: 9px; margin: 15px 0 4px; }
 .table-sample small { font-size: 9px; color: #666c5c; }
 .sample-pair { display: grid; grid-template-columns: 1fr 15px 1fr; gap: 16px; align-items: center; padding-top: 9px; font-size: 11px; color: #656d58; }

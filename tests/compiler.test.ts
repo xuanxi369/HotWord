@@ -38,7 +38,7 @@ describe('用户导入格式回归', () => {
     expect(fileText(exact.content).length).toBe(2048);
     const tooLong = compileHotwords([c('词'.repeat(2046))]);
     expect(tooLong.count).toBe(0);
-    expect(compileHotwords([c('😀')]).chars).toBe(5);
+    expect(compileHotwords([c('𠀀')]).chars).toBe(5);
     const exactTranslation = compileTranslations([c('A'.repeat(20475), 'B')]);
     expect(exactTranslation.chars).toBe(20480);
   });
