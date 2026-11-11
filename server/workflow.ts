@@ -2,12 +2,13 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import { JobInputSchema, type ExtractionResult } from '../shared/schema';
 import { bisectText } from '../shared/chunks';
-import { extractChunk } from './ai';
+import { callBudget, extractChunk } from './ai';
+import { HttpError } from './auth';
 import type { Env } from './env';
 import { executionConfig, extractionChunks, type ExecutionJob } from './jobs';
 import { taskKey } from './credentials';
 import { ModelError, OutputLimitError, teamKey } from './providers';
-import { deleteObjects, recordUsage, releaseTask } from './store';
+import { deleteObjects, recordUsage, releaseTask, reserveModelCall } from './store';
 
 function failureMessage(reason: string) {
   return `提取失败：${reason.replace(/。+$/, '')}。未生成可下载的完整结果；可重新配置、重试或手动切换服务。`;
@@ -48,6 +49,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             }
             let result: ExtractionResult;
             try {
+              await reserveModelCall(this.env, job, pricing, callBudget(config, chunk.text));
               const keyValue = job.mode === 'personal' ? await taskKey(this.env, id, job.owner) : teamKey(this.env, config.provider);
               result = await extractChunk(this.env, config, keyValue, chunk.text, chunk.label, `ai-${suffix}`, usage => recordUsage(this.env, job, pricing, usage));
             } catch (e) {
@@ -55,7 +57,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
               // part has its own timeout/retry; truncated content is never saved.
               if (e instanceof OutputLimitError && part === undefined && bisectText(chunk.text)) return null;
               const reason = e instanceof OutputLimitError ? '缩小片段后模型输出仍达到上限，请提高输出上限或减少所选内容'
-                : e instanceof ModelError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试';
+                : e instanceof HttpError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试';
               // Workflow may serialize the thrown error and lose its class.
               // Persist only our safe message before it crosses that boundary.
               await this.env.DB.prepare('UPDATE jobs SET error=? WHERE id=?').bind(failureMessage(reason), id).run();

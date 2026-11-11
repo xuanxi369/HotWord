@@ -9,6 +9,8 @@ import { bisectText } from '../shared/chunks';
 import type { ExtractionResult } from '../shared/schema';
 import { testEnv } from './support/database';
 import { NonRetryableError } from './support/workflow-runtime';
+import { recordUsage, releaseTask } from '../server/store';
+import { settings } from '../server/models';
 
 const text = 'Somnia-梦境公链，Industrial Collaboration-产业协同';
 const result = { terms: [{ source: 'Somnia', target: '梦境公链', category: 'company', priority: 90, basis: 'source', evidence: text }, { source: 'Industrial Collaboration', target: '产业协同', category: 'industry', priority: 80, basis: 'source', evidence: text }] };
@@ -146,6 +148,46 @@ describe('后台任务、清理与用量闭环', () => {
     expect(sqlite.prepare('SELECT status,progress,total,input_tokens,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', progress: 3, total: 3, input_tokens: 700, output_tokens: 26000 });
     expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
     expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
+  });
+  it('已使用 40000 Token 时，24 片密集表仍可在默认团队额度内完整处理', async () => {
+    const { env, sqlite, objects } = testEnv(), config = modelDefaults('deepseek');
+    env.TEAM_SERVICES = JSON.stringify([{ id: 'deepseek', name: '团队模型', config }]);
+    const previous = await createJob(env, owner, { name: '旧失败任务', segments: [{ id: 'p', label: '原文', text }], selection: { mode: 'team', serviceId: 'deepseek' } });
+    await recordUsage(env, { id: previous.id, owner, mode: 'team', provider: 'deepseek', model: config.model }, { input: null, output: null }, { input: 48017, output: 40000, estimated: false });
+    await releaseTask(env, previous.id);
+    sqlite.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(previous.id);
+    const segments = Array.from({ length: 24 }, (_, sheet) => ({ id: `${sheet}`, label: `工作表${sheet}`, text: Array.from({ length: 38 }, (_, row) => `Term${sheet}_${row}\t词条${sheet}_${row}`).join('\n') }));
+    const job = await createJob(env, owner, { name: '24 片术语表', segments, selection: { mode: 'team', serviceId: 'deepseek' } });
+    expect((await settings(env, owner)).available.teamOutput).toBe(1000000 - 40000 - 8000);
+    const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const source = JSON.parse(init.body as string).messages[1].content as string;
+      const terms = source.split('\n').filter(Boolean).map(evidence => {
+        const [source, target] = evidence.split('\t');
+        return { source, target, category: 'industry', priority: 80, basis: 'source', evidence };
+      });
+      expect((await settings(env, owner)).available.teamOutput).toBeGreaterThanOrEqual(0);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms }) } }], usage: { prompt_tokens: 100, completion_tokens: terms.length * 80 } });
+    });
+    vi.stubGlobal('fetch', fetcher); await run(env, job.id);
+    const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
+    expect(saved.candidates.map(c => `${c.source}\t${c.target}`)).toEqual(segments.flatMap(s => s.text.split('\n')));
+    expect(fetcher).toHaveBeenCalledTimes(24);
+    expect((await settings(env, owner)).available.teamOutput).toBe(1000000 - 40000 - 24 * 38 * 80);
+    expect(sqlite.prepare('SELECT status,total,progress FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', total: 24, progress: 24 });
+  });
+  it('恢复时真实额度耗尽会在下一次请求前停止，不调用模型或泄漏部分结果', async () => {
+    const { env, sqlite, objects } = testEnv(), config = modelDefaults('deepseek');
+    env.TEAM_SERVICES = JSON.stringify([{ id: 'deepseek', name: '团队模型', config }]);
+    sqlite.prepare('INSERT INTO member_policies VALUES(?,?)').run(owner, JSON.stringify({ email: owner, teamDailyOutput: 16000 }));
+    const job = await createJob(env, owner, { name: '恢复额度测试', segments: [{ id: 's', label: '原文', text: `${text}\n光伏组件 Photovoltaic Module` }], selection: { mode: 'team', serviceId: 'deepseek' } });
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ choices: [{ finish_reason: 'length' }], usage: { prompt_tokens: 100, completion_tokens: 8000 } }))
+      .mockResolvedValueOnce(Response.json(reply('deepseek')));
+    vi.stubGlobal('fetch', fetcher); await expect(run(env, job.id, true)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(sqlite.prepare('SELECT status,error,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'failed', output_tokens: 8080 });
+    expect(sqlite.prepare('SELECT error FROM jobs WHERE id=?').get(job.id)?.error).toContain('团队输出 Token 额度不足');
+    expect([...objects.keys()]).toHaveLength(0);
+    expect((await settings(env, owner)).available.teamOutput).toBe(16000 - 8080);
   });
   it('一个片段成功、另一个截断时整项失败，不留下部分结果或密钥', async () => {
     const { env, objects, sqlite } = testEnv(), job = await personalJob(env, 'openai', [{ id: 'p', label: '第一页', text }, { id: 'q', label: '第二页', text: '字'.repeat(10000) }]);

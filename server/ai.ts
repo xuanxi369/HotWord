@@ -61,6 +61,7 @@ export function validateModelResult(raw: unknown, text: string, label: string, p
 }
 
 export const promptTokenReserve = prompt.length + 512;
+export function callBudget(config: ModelConfig, text: string) { return { input: text.length + promptTokenReserve, output: config.maxOutputTokens }; }
 export function termLimit(config: ModelConfig) { return Math.max(1, Math.min(180, Math.floor((config.maxOutputTokens - 256) / 100))); }
 export async function extractChunk(env: Env, config: ModelConfig, key: string, text: string, label: string, prefix: string, record: (usage: TokenUsage) => Promise<void>): Promise<ExtractionResult> {
   let usage: TokenUsage | undefined;

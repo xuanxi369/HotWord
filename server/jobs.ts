@@ -1,10 +1,10 @@
 import { JobCreateSchema, JobInputSchema, type Job, type JobInput } from '../shared/schema';
 import { ModelConfigSchema, type ModelConfig } from '../shared/models';
 import { chunkSegments } from '../shared/chunks';
-import { promptTokenReserve, termLimit } from './ai';
+import { callBudget, promptTokenReserve, termLimit } from './ai';
 import { HttpError } from './auth';
 import { credentialConfig, decryptKey, encryptKey, ownedCredential, type StoredCredential } from './credentials';
-import { platformLimits, policy, services } from './models';
+import { platformLimits, policy, services, settings } from './models';
 import { teamKey } from './providers';
 import { deleteObjects, price, releaseTask, type Pricing } from './store';
 import type { Env } from './env';
@@ -37,13 +37,13 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
     config = service.config; serviceName = service.name; pricing = { input: service.inputUsdPerMillion, output: service.outputUsdPerMillion };
   } else { credential = await ownedCredential(env, selection.credentialId, owner); config = credentialConfig(credential); serviceName = credential.name; personalKey = await decryptKey(env, credential, owner, credential.id); }
   const chunks = extractionChunks(parsed.data.segments, config);
-  // A parent plus two smaller parts, each with at most one connection retry.
-  // Text can be sent twice at both levels; prompts can be sent six times.
-  const reserve = { input: chunks.reduce((n, c) => n + 4 * c.text.length + 6 * promptTokenReserve, 0), output: 6 * chunks.length * config.maxOutputTokens };
+  // Hold the first call only. Workflow atomically renews this reservation before
+  // every later call, including retries and recovery parts.
+  const reserve = callBudget(config, chunks[0].text);
   const reservedUsd = price(reserve, pricing), limits = await policy(env, owner), team = selection.mode === 'team';
   if (team && limits.teamDailyUsd !== null && reservedUsd === null) throw new HttpError(503, '该团队模型未配置价格，无法执行金额额度校验，请联系管理员');
   const id = crypto.randomUUID(), now = Date.now(), since = now - 86400000;
-  // Admission and job creation share a D1 transaction, including bounded recovery.
+  // Admission and job creation share a D1 transaction.
   const admission = env.DB.prepare(`INSERT INTO admissions(id,owner,mode,credential_id,created_at,reserved_input,reserved_output,reserved_usd)
     SELECT ?,?,?,?,?,?,?,? WHERE
     (SELECT COUNT(*) FROM admissions WHERE owner=? AND created_at>?)<? AND
@@ -63,7 +63,20 @@ export async function createJob(env: Env, owner: string, raw: unknown) {
   const inserted = await env.DB.batch([admission, env.DB.prepare(`INSERT INTO jobs(id,owner,name,status,created_at,expires_at,mode,provider,model,service_name,model_config,service_id,credential_id)
     SELECT ?,?,?,'queued',?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM admissions WHERE id=?)`)
     .bind(id, owner, parsed.data.name, now, now + 7 * 86400000, selection.mode, config.provider, config.model, serviceName, JSON.stringify({ config, pricing }), selection.mode === 'team' ? selection.serviceId : null, credential?.id ?? null, id)]);
-  if (!inserted[0].meta.changes) throw new HttpError(429, '任务或团队额度不足，或本次个人配置已被使用：请检查可用额度、并发任务，或重新配置个人密钥');
+  if (!inserted[0].meta.changes) {
+    const available = (await settings(env, owner)).available;
+    if (!available.concurrency) throw new HttpError(429, '同时运行的任务已达上限，请等待当前任务结束后重试');
+    if (!available.platformTasks) throw new HttpError(429, '个人每日任务数已达平台上限，请稍后重试');
+    if (team) {
+      if (!available.teamTasks) throw new HttpError(429, '团队每日任务数已达上限，请稍后重试或联系管理员');
+      if (reserve.input > available.teamInput) throw new HttpError(429, `团队输入 Token 额度不足：本次调用需预留 ${reserve.input.toLocaleString()}，当前可用 ${available.teamInput.toLocaleString()}，请减少所选内容或联系管理员`);
+      if (reserve.output > available.teamOutput) throw new HttpError(429, `团队输出 Token 额度不足：本次调用需预留 ${reserve.output.toLocaleString()}，当前可用 ${available.teamOutput.toLocaleString()}，请降低输出上限或联系管理员`);
+      if (available.teamUsd !== null && (reservedUsd ?? 0) > available.teamUsd) throw new HttpError(429, '团队金额额度不足，请联系管理员');
+    }
+    const global = await env.DB.prepare('SELECT COUNT(*) AS tasks FROM admissions WHERE created_at>?').bind(since).first<{ tasks: number }>();
+    if ((global?.tasks ?? 0) >= platformLimits.globalDailyTasks) throw new HttpError(429, '全站每日任务数已达上限，请稍后重试');
+    throw new HttpError(429, team ? '任务提交发生并发冲突，请刷新可用额度后重试' : '本次个人配置已被使用或过期，请重新配置个人密钥');
+  }
   try {
     if (credential) {
       const sealed = await encryptKey(env, personalKey!, owner, id);
