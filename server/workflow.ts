@@ -30,8 +30,9 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
         return count;
       });
       const resultKeys: string[] = [];
-      const extractPart = async (i: number, part?: 0 | 1): Promise<string | null> => {
-        const suffix = part === undefined ? `${i}` : `${i}-${part}`;
+      let splits = 0;
+      const extractPart = async (i: number, path = ''): Promise<string | null> => {
+        const suffix = path ? `${i}-${path}` : `${i}`;
         return step.do(`extract-${suffix}`, { retries: { limit: 1, delay: '10 seconds', backoff: 'constant' }, timeout: '3 minutes' }, async () => {
           // R2 stores content, while durable Workflow state stores only counts and object keys.
           const key = `${id}/chunk-${suffix}.json`;
@@ -42,11 +43,12 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             if (!job || !['queued', 'running'].includes(job.status)) throw new NonRetryableError('任务已取消');
             const { config, pricing } = executionConfig(this.env, job);
             let chunk = extractionChunks(JobInputSchema.parse(await object.json()).segments, config)[i];
-            if (part !== undefined) {
+            for (const part of path) {
               const pieces = bisectText(chunk.text);
               if (!pieces) throw new NonRetryableError('片段无法继续拆分，请提高输出上限');
-              chunk = { text: pieces[part], label: `${chunk.label} · 子片段 ${part + 1}`.slice(0, 180) };
+              chunk = { ...chunk, text: pieces[part === '0' ? 0 : 1] };
             }
+            if (path) chunk.label = `${chunk.label} · 子片段 ${path}`.slice(0, 180);
             let result: ExtractionResult;
             try {
               await reserveModelCall(this.env, job, pricing, callBudget(config, chunk.text));
@@ -55,8 +57,8 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
             } catch (e) {
               // Return only a split marker through Workflow state. Each smaller
               // part has its own timeout/retry; truncated content is never saved.
-              if (e instanceof OutputLimitError && part === undefined && bisectText(chunk.text)) return null;
-              const reason = e instanceof OutputLimitError ? '缩小片段后模型输出仍达到上限，请提高输出上限或减少所选内容'
+              if (e instanceof OutputLimitError && bisectText(chunk.text)) return null;
+              const reason = e instanceof OutputLimitError ? '最小片段仍无法完整输出，请提高模型单次输出容量或更换模型'
                 : e instanceof HttpError ? e.message : '模型或个人密钥配置不可用，请重新配置后重试';
               // Workflow may serialize the thrown error and lose its class.
               // Persist only our safe message before it crosses that boundary.
@@ -69,16 +71,17 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
           return key;
         });
       };
-      for (let i = 0; i < total; i++) {
-        const key = await extractPart(i);
+      const extractAll = async (i: number, path = ''): Promise<void> => {
+        const key = await extractPart(i, path);
         if (key !== null) resultKeys.push(key);
         else {
-          for (const part of [0, 1] as const) {
-            const childKey = await extractPart(i, part);
-            if (!childKey) throw new NonRetryableError('子片段结果缺失');
-            resultKeys.push(childKey);
-          }
+          // Every split strictly shortens the text, so recovery is finite.
+          splits++;
+          await extractAll(i, `${path}0`); await extractAll(i, `${path}1`);
         }
+      };
+      for (let i = 0; i < total; i++) {
+        await extractAll(i);
         await step.do(`progress-${i}`, async () => {
           await this.env.DB.prepare('UPDATE jobs SET progress=?,error=NULL WHERE id=?').bind(i + 1, id).run();
           return i + 1;
@@ -93,7 +96,7 @@ export class ExtractionWorkflow extends WorkflowEntrypoint<Env, { id: string }> 
           result.candidates.push(...chunk.candidates); result.warnings.push(...chunk.warnings);
         }
         result.warnings = [...new Set(result.warnings)];
-        if (resultKeys.length > total) result.warnings.push(`${resultKeys.length - total} 个片段达到输出预算，已自动拆小并完整处理；请核对候选词。`);
+        if (splits) result.warnings.push(`已自动拆小 ${splits} 次并完成全部子片段提取；请核对候选词。`);
         if (!result.candidates.length) result.warnings.push('没有找到有原文依据的候选词，请检查文本或改用原表导入');
         await this.env.FILES.put(`${id}/result.json`, JSON.stringify(result));
         await this.env.DB.prepare("UPDATE jobs SET status='completed', error=NULL WHERE id=?").bind(id).run();

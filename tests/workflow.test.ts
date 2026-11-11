@@ -115,13 +115,13 @@ describe('后台任务、清理与用量闭环', () => {
     expect(JSON.stringify(durable)).not.toContain('产业协同');
     await expect(taskKey(env, job.id, owner)).rejects.toThrow();
   });
-  it('缩小后的片段仍截断时停止，清理所有结果且不无限重试', async () => {
-    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '合成术语表', text: `${text}\n光伏组件 Photovoltaic Module` }]);
+  it('不可继续拆分的最小 Unicode 片段仍截断时停止并清理结果', async () => {
+    const { env, sqlite, objects } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '最小片段', text: '😀' }]);
     const fetcher = vi.fn().mockImplementation(async () => Response.json({ choices: [{ finish_reason: 'length', message: { content: '{"terms":[' } }], usage: { prompt_tokens: 100, completion_tokens: 8000 } }));
     vi.stubGlobal('fetch', fetcher);
     await expect(run(env, job.id, true)).rejects.toThrow();
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(sqlite.prepare('SELECT error FROM jobs WHERE id=?').get(job.id)?.error).toContain('缩小片段后模型输出仍达到上限');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(sqlite.prepare('SELECT error FROM jobs WHERE id=?').get(job.id)?.error).toContain('最小片段仍无法完整输出');
     expect([...objects.keys()]).toHaveLength(0);
     expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
   });
@@ -143,7 +143,7 @@ describe('后台任务、清理与用量闭环', () => {
     const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
     expect(saved.candidates.map(c => `${c.source}\t${c.target}`)).toEqual(rows);
     expect(new Set(saved.candidates.map(c => c.id)).size).toBe(rows.length);
-    expect(saved.warnings.join('')).toContain('2 个片段');
+    expect(saved.warnings.join('')).toContain('自动拆小 2 次');
     expect(fetcher).toHaveBeenCalledTimes(7);
     expect(sqlite.prepare('SELECT status,progress,total,input_tokens,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', progress: 3, total: 3, input_tokens: 700, output_tokens: 26000 });
     expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
@@ -158,36 +158,60 @@ describe('后台任务、清理与用量闭环', () => {
     sqlite.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(previous.id);
     const segments = Array.from({ length: 24 }, (_, sheet) => ({ id: `${sheet}`, label: `工作表${sheet}`, text: Array.from({ length: 38 }, (_, row) => `Term${sheet}_${row}\t词条${sheet}_${row}`).join('\n') }));
     const job = await createJob(env, owner, { name: '24 片术语表', segments, selection: { mode: 'team', serviceId: 'deepseek' } });
-    expect((await settings(env, owner)).available.teamOutput).toBe(1000000 - 40000 - 8000);
+    expect((await settings(env, owner)).available.teamOutput).toBeNull();
     const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
       const source = JSON.parse(init.body as string).messages[1].content as string;
       const terms = source.split('\n').filter(Boolean).map(evidence => {
         const [source, target] = evidence.split('\t');
         return { source, target, category: 'industry', priority: 80, basis: 'source', evidence };
       });
-      expect((await settings(env, owner)).available.teamOutput).toBeGreaterThanOrEqual(0);
+      expect((await settings(env, owner)).available.teamOutput).toBeNull();
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms }) } }], usage: { prompt_tokens: 100, completion_tokens: terms.length * 80 } });
     });
     vi.stubGlobal('fetch', fetcher); await run(env, job.id);
     const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
     expect(saved.candidates.map(c => `${c.source}\t${c.target}`)).toEqual(segments.flatMap(s => s.text.split('\n')));
     expect(fetcher).toHaveBeenCalledTimes(24);
-    expect((await settings(env, owner)).available.teamOutput).toBe(1000000 - 40000 - 24 * 38 * 80);
+    expect((await settings(env, owner)).usage.find(r => r.mode === 'team')?.output_tokens).toBe(40000 + 24 * 38 * 80);
     expect(sqlite.prepare('SELECT status,total,progress FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', total: 24, progress: 24 });
   });
-  it('恢复时真实额度耗尽会在下一次请求前停止，不调用模型或泄漏部分结果', async () => {
+  it('旧每日额度不会中断拆分恢复，全部子片段完成并记录实际用量', async () => {
     const { env, sqlite, objects } = testEnv(), config = modelDefaults('deepseek');
     env.TEAM_SERVICES = JSON.stringify([{ id: 'deepseek', name: '团队模型', config }]);
     sqlite.prepare('INSERT INTO member_policies VALUES(?,?)').run(owner, JSON.stringify({ email: owner, teamDailyOutput: 16000 }));
     const job = await createJob(env, owner, { name: '恢复额度测试', segments: [{ id: 's', label: '原文', text: `${text}\n光伏组件 Photovoltaic Module` }], selection: { mode: 'team', serviceId: 'deepseek' } });
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ choices: [{ finish_reason: 'length' }], usage: { prompt_tokens: 100, completion_tokens: 8000 } }))
-      .mockResolvedValueOnce(Response.json(reply('deepseek')));
-    vi.stubGlobal('fetch', fetcher); await expect(run(env, job.id, true)).rejects.toThrow();
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(sqlite.prepare('SELECT status,error,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'failed', output_tokens: 8080 });
-    expect(sqlite.prepare('SELECT error FROM jobs WHERE id=?').get(job.id)?.error).toContain('团队输出 Token 额度不足');
-    expect([...objects.keys()]).toHaveLength(0);
-    expect((await settings(env, owner)).available.teamOutput).toBe(16000 - 8080);
+      .mockResolvedValueOnce(Response.json(reply('deepseek')))
+      .mockResolvedValueOnce(Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms: [{ source: '光伏组件', target: 'Photovoltaic Module', category: 'industry', priority: 80, basis: 'source', evidence: '光伏组件 Photovoltaic Module' }], complete: true }) } }], usage: { prompt_tokens: 100, completion_tokens: 80 } }));
+    vi.stubGlobal('fetch', fetcher); await run(env, job.id);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(sqlite.prepare('SELECT status,error,output_tokens FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', error: null, output_tokens: 8160 });
+    const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
+    expect(saved.candidates.map(c => c.source)).toEqual(['Somnia', 'Industrial Collaboration', '光伏组件']);
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
+    expect((await settings(env, owner)).available.teamOutput).toBeNull();
+  });
+  for (const scenario of ['truncated', 'incomplete']) it(`${scenario} 可以继续多轮二分，最终覆盖全部词条`, async () => {
+    const rows = Array.from({ length: 32 }, (_, i) => `Term${String(i).padStart(2, '0')}\t词条${String(i).padStart(2, '0')}`);
+    const { env, objects, sqlite } = testEnv(), job = await personalJob(env, 'deepseek', [{ id: 's', label: '多轮术语表', text: rows.join('\n') }]);
+    const fetcher = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const lines = (JSON.parse(init.body as string).messages[1].content as string).split('\n').filter(Boolean);
+      const terms = lines.map(evidence => {
+        const [source, target] = evidence.split('\t');
+        return { source, target, category: 'industry', priority: 80, basis: 'source', evidence };
+      });
+      if (lines.length > 8 && scenario === 'truncated') return Response.json({ choices: [{ finish_reason: 'length' }], usage: { prompt_tokens: 100, completion_tokens: 8000 } });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ terms: lines.length > 8 ? terms.slice(0, 1) : terms, complete: lines.length <= 8 }) } }], usage: { prompt_tokens: 100, completion_tokens: 80 } });
+    });
+    vi.stubGlobal('fetch', fetcher); const durable = await run(env, job.id);
+    const saved = JSON.parse(objects.get(`${job.id}/result.json`)!) as ExtractionResult;
+    expect(saved.candidates.map(c => `${c.source}\t${c.target}`)).toEqual(rows);
+    expect(new Set(saved.candidates.map(c => c.id)).size).toBe(rows.length);
+    expect(saved.warnings.join('')).toContain('自动拆小 3 次');
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    expect(sqlite.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id)).toMatchObject({ status: 'completed', error: null });
+    expect(JSON.stringify(durable)).not.toContain('词条');
+    expect([...objects.keys()]).toEqual([`${job.id}/result.json`]);
   });
   it('一个片段成功、另一个截断时整项失败，不留下部分结果或密钥', async () => {
     const { env, objects, sqlite } = testEnv(), job = await personalJob(env, 'openai', [{ id: 'p', label: '第一页', text }, { id: 'q', label: '第二页', text: '字'.repeat(10000) }]);

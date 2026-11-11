@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { endpoint, ModelConfigSchema, modelDefaults, type Provider } from '../shared/models';
-import { extractChunk, promptTokenReserve, termLimit } from '../server/ai';
+import { extractChunk, promptTokenReserve } from '../server/ai';
 import { buildRequest, invokeModel, parseModelJson } from '../server/providers';
 import type { Env } from '../server/env';
 
@@ -42,13 +42,14 @@ describe('五家服务原生协议与共同提取规则', () => {
     expect(buildRequest(modelDefaults('qwen'), 's', 't')).toHaveProperty('enable_thinking', false);
     expect(buildRequest(modelDefaults('deepseek'), 's', 't')).toHaveProperty('thinking', { type: 'disabled' });
   });
-  it('提取提示词按实际输出上限限制条数、要求最短证据和紧凑 JSON', async () => {
+  it('提取提示词要求全部词条、最短证据和完整性声明，不按预算丢弃候选', async () => {
     const config = { ...modelDefaults('deepseek'), maxOutputTokens: 2048 };
     const fetcher = vi.fn().mockResolvedValue(Response.json(reply('deepseek'))); vi.stubGlobal('fetch', fetcher);
     await extractChunk({} as Env, config, 'synthetic-key', text, '原文', 't', vi.fn());
     const body = JSON.parse(fetcher.mock.calls[0][1].body), system = body.messages[0].content as string;
     expect(body.max_tokens).toBe(2048);
-    expect(system).toContain(`最多 ${termLimit(config)} 条词条`);
+    expect(system).toContain('全部符合条件的词条'); expect(system).toContain('不限定条数');
+    expect(system).toContain('complete=false'); expect(system).not.toMatch(/最多 \d+ 条词条/);
     expect(system).toContain('最短摘录'); expect(system).toContain('紧凑 JSON');
     expect(system.length + 256).toBeLessThanOrEqual(promptTokenReserve);
   });

@@ -66,11 +66,15 @@ export type TeamService = z.infer<typeof TeamServiceSchema>;
 export type PublicService = TeamService & { ready: boolean };
 export const MemberPolicySchema = z.object({
   email: z.union([z.email().max(200), z.literal('local@development')]).transform(s => s.toLowerCase()),
-  teamDailyTasks: z.number().int().min(0).max(200).default(20),
-  teamDailyInput: z.number().int().min(0).max(100000000).default(2000000),
-  teamDailyOutput: z.number().int().min(0).max(100000000).default(1000000),
+  // Accept legacy numeric settings, but all daily business quotas are disabled.
+  teamDailyTasks: z.number().int().min(0).max(200).nullable().default(null),
+  teamDailyInput: z.number().int().min(0).max(100000000).nullable().default(null),
+  teamDailyOutput: z.number().int().min(0).max(100000000).nullable().default(null),
   teamDailyUsd: z.number().min(0).max(100000).nullable().default(null),
-}).strict();
+}).strict().transform(v => {
+  v.teamDailyTasks = null; v.teamDailyInput = null; v.teamDailyOutput = null; v.teamDailyUsd = null;
+  return v;
+});
 export type MemberPolicy = z.infer<typeof MemberPolicySchema>;
 export const ModelSelectionSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('team'), serviceId: z.string().regex(/^[a-z0-9-]{1,60}$/) }).strict(),
@@ -79,8 +83,8 @@ export const ModelSelectionSchema = z.discriminatedUnion('mode', [
 export type ModelSelection = z.infer<typeof ModelSelectionSchema>;
 export type Credential = { id: string; name: string; masked_key: string; config: ModelConfig; remember: boolean; created_at: number; expires_at: number | null };
 export type UsageSummary = { mode: 'team' | 'personal'; tasks: number; input_tokens: number; output_tokens: number; estimated_usd: number | null; estimated_calls: number; unpriced_calls: number };
-export type ModelSettings = { services: PublicService[]; credentials: Credential[]; policy: MemberPolicy; usage: UsageSummary[]; personalReady: boolean; platformDailyTasks: number; platformConcurrency: number;
-  available: { teamTasks: number; teamInput: number; teamOutput: number; teamUsd: number | null; platformTasks: number; concurrency: number } };
+export type ModelSettings = { services: PublicService[]; credentials: Credential[]; policy: MemberPolicy; usage: UsageSummary[]; personalReady: boolean; platformDailyTasks: number | null; platformConcurrency: number;
+  available: { teamTasks: number | null; teamInput: number | null; teamOutput: number | null; teamUsd: number | null; platformTasks: number | null; concurrency: number } };
 export type DeploymentDiagnostics = {
   database: { status: 'ready' | 'incomplete' | 'unavailable' | 'missing_binding'; missingTables: string[]; missingColumns: string[] };
   encryption: 'ready' | 'missing' | 'invalid';

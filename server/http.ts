@@ -40,7 +40,7 @@ export async function fetchApi(request: Request, env: Env): Promise<Response> {
       else if (url.pathname === '/api/admin/models' && method === 'GET') {
         const all = await services(env), policies = await env.DB.prepare('SELECT config FROM member_policies').all<{ config: string }>();
         const members = await env.DB.prepare('SELECT DISTINCT owner FROM admissions ORDER BY owner LIMIT 200').all<{ owner: string }>();
-        response = json({ services: all.map(s => ({ ...s, ready: serviceReady(env, s) })), policies: policies.results.map(r => JSON.parse(r.config)), members: members.results.map(r => r.owner), usage: await usageSummary(env) });
+        response = json({ services: all.map(s => ({ ...s, ready: serviceReady(env, s) })), policies: policies.results.map(r => MemberPolicySchema.parse(JSON.parse(r.config))), members: members.results.map(r => r.owner), usage: await usageSummary(env) });
       } else if (url.pathname === '/api/admin/models' && method === 'PUT') {
         const input = TeamServiceSchema.parse(await boundedJson(request, 10000));
         await env.DB.prepare('INSERT INTO team_services(id,config) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config').bind(input.id, JSON.stringify(input)).run(); response = json({ saved: true });

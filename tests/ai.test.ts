@@ -29,10 +29,13 @@ describe('模型输出不能替代原文证据', () => {
     const result = validateModelResult({ terms: [{ ...term, source: text, target: '', evidence: text, basis: 'none' }] }, text, '说明页', 'test');
     expect(result.candidates).toHaveLength(0);
   });
-  it('失效 JSON、无效类别、无限数组与整段词条都无法进入候选库', () => {
+  it('失效 JSON、无效类别与整段词条都无法进入候选库', () => {
     expect(() => validateModelResult('ignore instructions', '', '', '')).toThrow();
     expect(() => validateModelResult({ terms: [{ ...term, category: 'system' }] }, '', '', '')).toThrow();
-    expect(() => validateModelResult({ terms: Array.from({ length: 181 }, () => term) }, '', '', '')).toThrow();
     expect(() => validateModelResult({ terms: [{ ...term, source: '字'.repeat(181) }] }, '', '', '')).toThrow();
+  });
+  it('有原文依据的候选不会因超过 180 条而被拒绝', () => {
+    const terms = Array.from({ length: 181 }, (_, i) => ({ source: `行业词条${i}`, target: '', category: 'industry', priority: 80, basis: 'none', evidence: `行业词条${i}` }));
+    expect(validateModelResult({ terms, complete: true }, terms.map(t => t.evidence).join('\n'), '原文', 't').candidates).toHaveLength(181);
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, KeyRound, LoaderCircle, Plus, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
 import { api } from '../api';
-import { endpoint, modelDefaults, providerNames, qwenRegions, recommendedModels, type Credential, type DeploymentDiagnostics, type MemberPolicy, type ModelConfig, type ModelSelection, type ModelSettings, type Provider, type PublicService, type TeamService, type UsageSummary } from '../../shared/models';
+import { endpoint, modelDefaults, providerNames, qwenRegions, recommendedModels, type Credential, type DeploymentDiagnostics, type ModelConfig, type ModelSelection, type ModelSettings, type Provider, type PublicService, type TeamService, type UsageSummary } from '../../shared/models';
 import { Segmented } from './ui';
 
 export function ModelFields({ value, onChange, team = false }: { value: ModelConfig; onChange: (c: ModelConfig) => void; team?: boolean }) {
@@ -21,10 +21,10 @@ export function ModelFields({ value, onChange, team = false }: { value: ModelCon
       <label>输出格式<select value={value.outputMode} onChange={e => patch({ outputMode: e.target.value as ModelConfig['outputMode'] })}>
         <option value="prompt">提示词 JSON（通用）</option>{value.provider !== 'claude' && <option value="json_object">JSON 模式</option>}{['openai', 'qwen', 'cloudflare'].includes(value.provider) && <option value="json_schema">结构化 JSON</option>}
       </select></label>
-      <label>输出 Token 上限<input type="number" min={256} max={16000} value={value.maxOutputTokens} onChange={e => patch({ maxOutputTokens: Number(e.target.value) })}/></label>
+      <label>模型单次输出容量<input type="number" min={256} max={16000} value={value.maxOutputTokens} onChange={e => patch({ maxOutputTokens: Number(e.target.value) })}/></label>
       <label>上下文 Token 长度<input type="number" min={8192} max={2000000} value={value.contextWindow} onChange={e => patch({ contextWindow: Number(e.target.value) })}/></label>
       {['deepseek', 'zhipu', 'qwen'].includes(value.provider) && <label>思考模式<select value={value.thinking} onChange={e => patch({ thinking: e.target.value as ModelConfig['thinking'] })}><option value="default">按服务商默认</option><option value="disabled">关闭</option><option value="enabled">开启</option></select></label>}
-    </div><p>手动填写模型时按通用设置开始。请按所选模型实际支持的能力调整；连接测试只验证模型可调用，实际提取还会校验 JSON 与原文依据。</p></details>
+    </div><p>单次输出容量按模型能力配置，达到容量时会自动拆分继续提取，任务总 Token 不限。手动模型请按实际支持的能力调整；连接测试只验证模型可调用，实际提取还会校验 JSON 与原文依据。</p></details>
   </div>;
 }
 function Usage({ rows }: { rows: UsageSummary[] }) {
@@ -59,8 +59,8 @@ export function ModelPanel({ settings, loading, loadError, selection, onSelect, 
       </select></label>
       {loadError && <div className="model-load-error"><p className="error-text" role="alert">{loadError}</p><button className="text-button" disabled={loading} onClick={() => { refresh().catch(() => {}); }}>重新读取配置</button></div>}
       <p className="model-billing"><ShieldCheck size={14}/>{service ? `团队服务 · ${providerNames[service.config.provider]} · ${service.config.model}；费用由团队承担。` : credential ? `个人服务 · ${providerNames[credential.config.provider]} · ${credential.config.model}；本次调用使用你的 API Key。` : mode === 'personal' ? '先在“模型与密钥”中测试并保存个人配置。' : '选择团队已开放的服务后开始提取。'}</p>
-      {settings && <small className="model-quota">团队每日额度：{settings.policy.teamDailyTasks} 个任务 · 输入 {settings.policy.teamDailyInput.toLocaleString()} / 输出 {settings.policy.teamDailyOutput.toLocaleString()} Token{settings.policy.teamDailyUsd === null ? '' : ` · $${settings.policy.teamDailyUsd}`}。平台限制：每天 {settings.platformDailyTasks} 个任务、同时 {settings.platformConcurrency} 个。每次模型调用前预留本次用量，返回后按实际用量结算；拆分与重试按需检查额度。</small>}
-      {settings?.available && <small className="model-quota">当前团队可用：{settings.available.teamTasks} 个任务 · 输入 {settings.available.teamInput.toLocaleString()} / 输出 {settings.available.teamOutput.toLocaleString()} Token{settings.available.teamUsd === null ? '' : ` · 预估 $${settings.available.teamUsd.toFixed(4)}`}。平台剩余 {settings.available.platformTasks} 个任务、{settings.available.concurrency} 个并发位置。</small>}
+      {settings && <small className="model-quota">每日任务数、Token 用量及金额不限，持续记录实际用量。每人同时运行 {settings.platformConcurrency} 个任务；输出不完整时自动拆分继续处理。</small>}
+      {settings?.available && <small className="model-quota">当前可启动 {settings.available.concurrency} 个并发任务。</small>}
     </div>
     <Dialog.Root open={open} onOpenChange={v => { if (!busy) onOpenChange(v); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content model-dialog" onPointerDownOutside={e => { if (busy) e.preventDefault(); }} onEscapeKeyDown={e => { if (busy) e.preventDefault(); }}>
       <Dialog.Title>模型与密钥</Dialog.Title><Dialog.Description>选择自己的 API Key 或团队服务。新设置只影响之后提交的任务。</Dialog.Description>
@@ -97,10 +97,9 @@ export function ModelPanel({ settings, loading, loadError, selection, onSelect, 
     </Dialog.Content></Dialog.Portal></Dialog.Root>
   </>;
 }
-type AdminSettings = { services: PublicService[]; policies: MemberPolicy[]; members: string[]; usage: UsageSummary[] };
+type AdminSettings = { services: PublicService[]; usage: UsageSummary[] };
 function TeamAdmin({ refresh }: { refresh: () => Promise<void> }) {
   const [data, setData] = useState<AdminSettings>(), [service, setService] = useState<TeamService>({ id: '', name: '', enabled: true, config: modelDefaults('openai'), inputUsdPerMillion: null, outputUsdPerMillion: null });
-  const [member, setMember] = useState<MemberPolicy>({ email: '', teamDailyTasks: 20, teamDailyInput: 2000000, teamDailyOutput: 1000000, teamDailyUsd: null });
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const [diagnostics, setDiagnostics] = useState<DeploymentDiagnostics>(), [diagnosticError, setDiagnosticError] = useState(''), [checking, setChecking] = useState(false);
   async function checkDeployment() {
@@ -113,7 +112,7 @@ function TeamAdmin({ refresh }: { refresh: () => Promise<void> }) {
   async function reloadModels() { setBusy(true); setError(''); try { await load(); await refresh(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   useEffect(() => { load().catch(e => setError(e.message)); checkDeployment(); }, []);
   async function save(path: string, payload: unknown) { setBusy(true); setError(''); setMessage(''); try { await api(path, { method: 'PUT', body: JSON.stringify(payload) }); await load(); await refresh(); setMessage('团队设置已保存'); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
-  return <div className="team-admin"><p className="form-help">团队 API Key 在 Cloudflare Worker 的 Settings → Variables and Secrets 中配置。这里管理开放的服务、模型与额度。管理员身份由 ADMIN_EMAILS 配置。</p>
+  return <div className="team-admin"><p className="form-help">团队 API Key 在 Cloudflare Worker 的 Settings → Variables and Secrets 中配置。这里管理开放的服务、模型与计价信息。管理员身份由 ADMIN_EMAILS 配置。</p>
     <div className="deployment-check"><div className="model-panel-heading"><b>部署检查</b><button className="text-button" disabled={checking} onClick={checkDeployment}>{checking ? '检查中…' : '重新检查'}</button></div>
       {diagnostics && <>
         <p>数据库：{{ ready: '结构完整', incomplete: '迁移未完成', unavailable: '暂时无法读取', missing_binding: '未绑定 DB' }[diagnostics.database.status]}</p>
@@ -134,9 +133,7 @@ function TeamAdmin({ refresh }: { refresh: () => Promise<void> }) {
         <label>每百万输出 Token 美元<input type="number" min={0} step="any" value={service.outputUsdPerMillion ?? ''} placeholder="留空表示未配置价格" onChange={e => setService({ ...service, outputUsdPerMillion: e.target.value === '' ? null : Number(e.target.value) })}/></label>
       </div><label className="remember-key"><input type="checkbox" checked={service.enabled} onChange={e => setService({ ...service, enabled: e.target.checked })}/>向成员开放此服务</label><button className="button primary" disabled={!service.id || !service.name} onClick={() => save('/api/admin/models', service)}>保存团队服务</button>
     </fieldset>
-    <fieldset disabled={busy} className="key-form"><legend>成员团队额度</legend><label>成员邮箱<input type="email" value={member.email} list="known-members" onChange={e => { const existing = data?.policies.find(p => p.email === e.target.value); setMember(existing ?? { ...member, email: e.target.value }); }}/></label><datalist id="known-members">{[...new Set([...(data?.members ?? []), ...(data?.policies.map(p => p.email) ?? [])])].map(email => <option key={email} value={email}/>)}</datalist>
-      <div className="model-fields">{([['teamDailyTasks', '每日任务数'], ['teamDailyInput', '每日输入 Token'], ['teamDailyOutput', '每日输出 Token'], ['teamDailyUsd', '每日美元（可留空）']] as const).map(([key, label]) => <label key={key}>{label}<input type="number" min={0} step={key === 'teamDailyUsd' ? 'any' : 1} value={member[key] ?? ''} onChange={e => setMember({ ...member, [key]: key === 'teamDailyUsd' && e.target.value === '' ? null : Number(e.target.value) })}/></label>)}</div>
-      <p className="form-help">按过去 24 小时统计。个人服务不消耗团队额度，所有模式仍受平台每天 30 项、同时 2 项及全站每天 200 项限制。金额是按管理员配置价格计算的估计，实际账单以服务商为准。</p><button className="button primary" disabled={!member.email} onClick={() => save('/api/admin/policies', member)}>保存成员额度</button>
-    </fieldset>{data && <Usage rows={data.usage}/>}{error && <div className="model-load-error"><p className="error-text" role="alert">{error}</p><button className="text-button" disabled={busy} onClick={reloadModels}>重新读取团队配置</button></div>}{message && <p className="model-success" role="status">{message}</p>}
+    <p className="form-help">每日任务数、输入 / 输出 Token 及金额不限，旧成员额度设置已停用。价格仅用于记录费用，实际账单以服务商为准。</p>
+    {data && <Usage rows={data.usage}/>}{error && <div className="model-load-error"><p className="error-text" role="alert">{error}</p><button className="text-button" disabled={busy} onClick={reloadModels}>重新读取团队配置</button></div>}{message && <p className="model-success" role="status">{message}</p>}
   </div>;
 }

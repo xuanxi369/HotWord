@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bisectText, chunkSegments } from '../shared/chunks';
 import { ModelConfigSchema, modelDefaults } from '../shared/models';
 import { chunkSize, extractionChunks } from '../server/jobs';
-import { termLimit } from '../server/ai';
+import { estimatedTermsPerChunk } from '../server/ai';
 import { decodeReply, ModelError, OutputLimitError } from '../server/providers';
 
 describe('输出预算与完整分片', () => {
@@ -34,7 +34,7 @@ describe('输出预算与完整分片', () => {
     for (const cap of [256, 2048, 8000, 16000]) {
       const config = { ...modelDefaults('deepseek'), maxOutputTokens: cap };
       const chunks = extractionChunks([{ id: 's', label: '术语表', text }], config);
-      const maxRows = Math.max(1, Math.floor(termLimit(config) / 2));
+      const maxRows = Math.max(1, Math.floor(estimatedTermsPerChunk(config) / 2));
       expect(chunks.map(c => c.text).join('')).toBe(text);
       for (const chunk of chunks) {
         const lines = chunk.text.split('\n').filter(Boolean);

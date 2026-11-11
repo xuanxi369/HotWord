@@ -57,12 +57,13 @@ describe('任务快照、原子额度与费用归属', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS n FROM job_secrets').get()?.n).toBe(0);
     expect(sqlite.prepare('SELECT active FROM admissions').get()?.active).toBe(0); expect([...objects.keys()]).toHaveLength(0);
   });
-  it('可用额度包含活跃预留，任务结束后只扣已消耗 Token', async () => {
+  it('用量持续记录，每日额度显示不限，结束后释放并发', async () => {
     const { env } = testEnv(); env.TEAM_SERVICES = JSON.stringify([{ id: 'openai', name: '团队模型', config: modelDefaults('openai'), inputUsdPerMillion: 1, outputUsdPerMillion: 2 }]);
     const job = await createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } });
-    const pending = await settings(env, owner); expect(pending.available.teamOutput).toBe(1000000 - 8000); expect(pending.available.concurrency).toBe(1);
+    const pending = await settings(env, owner); expect(pending.available.teamOutput).toBeNull(); expect(pending.available.concurrency).toBe(1);
     await recordUsage(env, { id: job.id, owner, mode: 'team', provider: 'openai', model: 'gpt-4.1-mini' }, { input: 1, output: 2 }, { input: 100, output: 40, estimated: false });
-    await releaseTask(env, job.id); const done = await settings(env, owner); expect(done.available.teamOutput).toBe(1000000 - 40); expect(done.available.teamTasks).toBe(19); expect(done.available.concurrency).toBe(2);
+    await releaseTask(env, job.id); const done = await settings(env, owner); expect(done.available.teamOutput).toBeNull(); expect(done.available.teamTasks).toBeNull(); expect(done.available.concurrency).toBe(2);
+    expect(done.usage.find(r => r.mode === 'team')?.output_tokens).toBe(40);
   });
   it('仅一次个人密钥提交后删除草稿，Workflow 只收到任务 ID，R2 不包含密钥', async () => {
     const { env, objects, starts, sqlite } = testEnv(); const c = await saveCredential(env, owner, personal());
@@ -80,15 +81,14 @@ describe('任务快照、原子额度与费用归属', () => {
     expect(await taskKey(env, job.id, owner)).toBe(personal().apiKey);
     expect(sqlite.prepare('SELECT provider,model FROM jobs WHERE id=?').get(job.id)).toMatchObject({ provider: 'openai', model: 'gpt-4.1-mini' });
   });
-  it('个人模式不消耗团队任务额度，两种模式仍受同一个并发限额', async () => {
+  it('个人调用保留独立归属，两种模式仍受同一个并发限额', async () => {
     const { env, sqlite } = testEnv(); sqlite.prepare('INSERT INTO member_policies VALUES(?,?)').run(owner, JSON.stringify({ email: owner, teamDailyTasks: 0 }));
-    await expect(createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'workers-ai' } })).rejects.toMatchObject({ status: 429 });
     const c = await saveCredential(env, owner, personal(true));
     const jobs = await Promise.allSettled(Array.from({ length: 3 }, () => createJob(env, owner, { ...input, selection: { mode: 'personal', credentialId: c.id } })));
     expect(jobs.filter(j => j.status === 'fulfilled')).toHaveLength(2); expect(jobs.filter(j => j.status === 'rejected')).toHaveLength(1);
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM admissions WHERE mode='team'").get()?.n).toBe(0);
   });
-  it('删除任务清理密钥并释放并发，但不重置每日任务额度', async () => {
+  it('删除任务清理密钥并释放并发，保留历史用量记录', async () => {
     const { env, sqlite, terminated } = testEnv(); const c = await saveCredential(env, owner, personal(true));
     const job = await createJob(env, owner, { ...input, selection: { mode: 'personal', credentialId: c.id } });
     expect((await fetchApi(request(`/api/jobs/${job.id}`, 'DELETE'), env)).status).toBe(200); expect(terminated).toEqual([job.id]);
@@ -96,16 +96,16 @@ describe('任务快照、原子额度与费用归属', () => {
     expect(sqlite.prepare('SELECT active FROM admissions WHERE id=?').get(job.id)?.active).toBe(0);
     expect((await settings(env, owner)).usage.find(u => u.mode === 'personal')?.tasks).toBe(1);
   });
-  it('团队任务按预留 Token 和金额校验，禁用服务、未配置价格都不能绕过', async () => {
+  it('旧 Token 和金额限制及未计价不阻断调用，关闭的服务仍不可调用', async () => {
     const { env, sqlite } = testEnv();
     const svc = { id: 'openai', name: '团队 OpenAI', enabled: true, config: modelDefaults('openai'), inputUsdPerMillion: 1, outputUsdPerMillion: 2 };
     env.TEAM_SERVICES = JSON.stringify([svc]);
-    sqlite.prepare('INSERT INTO member_policies VALUES(?,?)').run(owner, JSON.stringify({ email: owner, teamDailyOutput: 1 }));
-    await expect(createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } })).rejects.toMatchObject({ status: 429 });
-    sqlite.prepare('UPDATE member_policies SET config=?').run(JSON.stringify({ email: owner, teamDailyUsd: 0.00001 }));
-    await expect(createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } })).rejects.toMatchObject({ status: 429 });
+    sqlite.prepare('INSERT INTO member_policies VALUES(?,?)').run(owner, JSON.stringify({ email: owner, teamDailyTasks: 0, teamDailyInput: 0, teamDailyOutput: 1, teamDailyUsd: 0.00001 }));
+    const first = await createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } });
+    await releaseTask(env, first.id);
     env.TEAM_SERVICES = JSON.stringify([{ ...svc, inputUsdPerMillion: null }]);
-    await expect(createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } })).rejects.toMatchObject({ status: 503 });
+    const second = await createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } });
+    await releaseTask(env, second.id);
     env.TEAM_SERVICES = JSON.stringify([{ ...svc, enabled: false }]);
     await expect(createJob(env, owner, { ...input, selection: { mode: 'team', serviceId: 'openai' } })).rejects.toMatchObject({ status: 400 });
   });

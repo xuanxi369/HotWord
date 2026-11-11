@@ -5,7 +5,7 @@ import { encryptionReady, publicCredential, type StoredCredential } from './cred
 import { teamKey } from './providers';
 import type { Env } from './env';
 
-export const platformLimits = { dailyTasks: 30, concurrency: 2, globalDailyTasks: 200 };
+export const platformLimits = { dailyTasks: null, concurrency: 2, globalDailyTasks: null };
 export function isAdmin(env: Env, user: { email: string; local: boolean }) {
   return user.local || (env.ADMIN_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).includes(user.email);
 }
@@ -24,7 +24,7 @@ export async function services(env: Env): Promise<TeamService[]> {
 export function serviceReady(env: Env, service: TeamService) { try { teamKey(env, service.config.provider); return true; } catch { return false; } }
 export async function policy(env: Env, email: string): Promise<MemberPolicy> {
   const row = await env.DB.prepare('SELECT config FROM member_policies WHERE email=?').bind(email).first<{ config: string }>();
-  return row ? MemberPolicySchema.parse(JSON.parse(row.config)) : { email, teamDailyTasks: 20, teamDailyInput: 2000000, teamDailyOutput: 1000000, teamDailyUsd: null };
+  return MemberPolicySchema.parse(row ? JSON.parse(row.config) : { email });
 }
 export async function usageSummary(env: Env, owner?: string): Promise<UsageSummary[]> {
   const since = Date.now() - 86400000, filter = owner ? ' AND owner=?' : '', args = owner ? [since, owner] : [since];
@@ -35,20 +35,14 @@ export async function usageSummary(env: Env, owner?: string): Promise<UsageSumma
 export async function settings(env: Env, owner: string): Promise<ModelSettings> {
   const available = await services(env);
   const rows = await env.DB.prepare('SELECT * FROM credentials WHERE owner=? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC').bind(owner, Date.now()).all<StoredCredential>();
-  const limits = await policy(env, owner), since = Date.now() - 86400000;
-  const spent = await env.DB.prepare(`SELECT COUNT(*) AS tasks,COALESCE(SUM(CASE WHEN active=1 THEN MAX(input_tokens,reserved_input) ELSE input_tokens END),0) AS input,
-    COALESCE(SUM(CASE WHEN active=1 THEN MAX(output_tokens,reserved_output) ELSE output_tokens END),0) AS output,
-    COALESCE(SUM(CASE WHEN active=1 THEN MAX(estimated_usd,reserved_usd) ELSE estimated_usd END),0) AS usd FROM admissions WHERE owner=? AND mode='team' AND created_at>?`)
-    .bind(owner, since).first<{ tasks: number; input: number; output: number; usd: number }>();
-  const platform = await env.DB.prepare('SELECT COUNT(CASE WHEN created_at>? THEN 1 END) AS tasks,COUNT(CASE WHEN active=1 THEN 1 END) AS active FROM admissions WHERE owner=?')
-    .bind(since, owner).first<{ tasks: number; active: number }>();
+  const limits = await policy(env, owner);
+  const platform = await env.DB.prepare('SELECT COUNT(*) AS active FROM admissions WHERE owner=? AND active=1')
+    .bind(owner).first<{ active: number }>();
   return { services: available.filter(s => s.enabled).map(s => ({ ...s, ready: serviceReady(env, s) })), credentials: rows.results.map(publicCredential),
     policy: limits, usage: await usageSummary(env, owner), personalReady: await encryptionReady(env), platformDailyTasks: platformLimits.dailyTasks, platformConcurrency: platformLimits.concurrency,
-    available: { teamTasks: Math.max(0, limits.teamDailyTasks - (spent?.tasks ?? 0)), teamInput: Math.max(0, limits.teamDailyInput - (spent?.input ?? 0)), teamOutput: Math.max(0, limits.teamDailyOutput - (spent?.output ?? 0)),
-      teamUsd: limits.teamDailyUsd === null ? null : Math.max(0, limits.teamDailyUsd - (spent?.usd ?? 0)), platformTasks: Math.max(0, platformLimits.dailyTasks - (platform?.tasks ?? 0)), concurrency: Math.max(0, platformLimits.concurrency - (platform?.active ?? 0)) } };
+    available: { teamTasks: null, teamInput: null, teamOutput: null, teamUsd: null, platformTasks: null, concurrency: Math.max(0, platformLimits.concurrency - (platform?.active ?? 0)) } };
 }
 export async function admitProbe(env: Env, owner: string) {
-  const result = await env.DB.prepare('INSERT INTO connection_probes(id,owner,created_at) SELECT ?,?,? WHERE (SELECT COUNT(*) FROM connection_probes WHERE owner=? AND created_at>?)<20')
-    .bind(crypto.randomUUID(), owner, Date.now(), owner, Date.now() - 86400000).run();
-  if (!result.meta.changes) throw new HttpError(429, '连接测试次数已达每日 20 次，请稍后再试');
+  await env.DB.prepare('INSERT INTO connection_probes(id,owner,created_at) VALUES(?,?,?)')
+    .bind(crypto.randomUUID(), owner, Date.now()).run();
 }
