@@ -247,8 +247,10 @@ export default function App() {
           <h1>好翻译，从<span className="headline-word">准确的词</span>开始。</h1>
           <p>上传会议资料，整理专属词库。三步，轻松带走。</p>
         </div>}
-        <div id="workflow" className="flow-bar"><nav className="steps" aria-label="工作流程">{([{ n: 1, label: '准备资料', icon: UploadCloud }, { n: 2, label: '核对词条', icon: FileCheck2 }, { n: 3, label: '下载词库', icon: Download }] as const).map(step => <button key={step.n} className={`step ${stage === step.n ? 'current' : ''}`} aria-current={stage === step.n ? 'step' : undefined} disabled={step.n !== 1 && (!reviewReady || busy || running)} onClick={() => goTo(step.n)}>
-          {stage === step.n && <motion.span layoutId="flow-indicator" className={`step-indicator tone-${stage}`}/>}<span className="step-number">{reviewReady && step.n === 1 ? <Check size={12}/> : `0${step.n}`}</span><span>{step.label}</span>{stage === step.n && <step.icon size={14} className="step-icon"/>}
+        <div id="workflow" className="flow-bar"><nav className="steps" aria-label="工作流程">
+          <span aria-hidden="true" className={`step-indicator tone-${stage}`} style={{ transform: `translateX(calc(${(stage - 1) * 100}% + ${(stage - 1) * 4}px))` }}/>
+          {([{ n: 1, label: '准备资料', icon: UploadCloud }, { n: 2, label: '核对词条', icon: FileCheck2 }, { n: 3, label: '下载词库', icon: Download }] as const).map(step => <button type="button" key={step.n} className={`step ${stage === step.n ? 'current' : ''}`} aria-current={stage === step.n ? 'step' : undefined} disabled={step.n !== 1 && (!reviewReady || busy || running)} onClick={() => goTo(step.n)}>
+          <span className="step-number">{reviewReady && step.n === 1 ? <Check size={12}/> : `0${step.n}`}</span><span>{step.label}</span>{stage === step.n && <step.icon size={14} className="step-icon"/>}
         </button>)}</nav></div>
         <div className="main-body">
           <AnimatePresence initial={false}>{error && <motion.div className="alert error" role="alert" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><span>{error}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setError('')}><X size={16}/></button></motion.div>}</AnimatePresence>

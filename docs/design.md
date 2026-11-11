@@ -32,7 +32,7 @@
 | 实际查看的参考 | 在 HotWord 中的实现 | 对用户的帮助 |
 | --- | --- | --- |
 | [recent.design 首页](https://recent.design/) | 宽留白、低对比背景、紧凑胶囊筛选、简洁卡片、悬停详情操作 | 减少同时争夺注意力的元素 |
-| [Liquid Stepper Interaction](https://recent.design/i/lrtfzrm-liquid-stepper-interaction) | Motion 共享布局胶囊指示器，暖色、淡紫、浅绿区分阶段，配合短暂内容淡入 | 明确当前位置，真正切换阶段内容 |
+| [Liquid Stepper Interaction](https://recent.design/i/lrtfzrm-liquid-stepper-interaction) | 三等分轨道内的单一胶囊滑块，暖色、淡紫、浅绿区分阶段，配合短暂内容淡入 | 明确当前位置，真正切换阶段内容 |
 | [SwiftUI Slider](https://recent.design/i/542towy-swiftui-slider-interaction) | 刻度轨道、随拖动移动的数字胶囊、即时重要度反馈，保留原生键盘控制 | 把抽象优先级变为可感知的调整 |
 | [Dark Mode Toggle](https://recent.design/i/yifo62r-dark-light-mode-toggle) | 有层次的轨道、弹簧滑动拨钮、确认态图标 | 清楚反馈表头、必保及双向映射状态 |
 
@@ -49,6 +49,10 @@
 - 次要文字提高对比度；长词组可换行；手机审核采用紧凑卡片行，导出采用单列。
 
 ## 验证记录
+
+2026-11-11 步骤切换修正：原共享布局动画把顶部标题增减造成的步骤条位移计入色块动画，复现到 14 帧越界、约 131px 垂直偏移。改为步骤条内始终挂载的单一滑块，固定三等分宽度，只通过局部水平位移切换，颜色平滑过渡。连续点击时从当前位置转向新的目标，初始显示不播放入场位移；支持减弱动效。
+
+真实 Chromium 在 1440、390、320px 及减弱动效模式捕获合计 499 帧，色块均保持在轨道内；每组连续切换 12 次，滚动场景、Space/Enter 操作和缩放后的停靠位置验证通过。TypeScript、前后端生产构建及 `git diff --check` 通过。修正尚未发布线上。
 
 - `npm test`：11 个测试文件、109 个测试通过。
 - TypeScript 与 Vite 生产构建通过。
