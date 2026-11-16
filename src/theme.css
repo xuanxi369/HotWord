@@ -5,10 +5,19 @@
 .translation-assist span { font-size: 10px; color: #69715f; line-height: 1.8; }
 .translation-assist-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .translation-assist-actions .text-button { font-size: 11px; }
+.button.ai-action { min-height: 40px; padding: 9px 16px; font-size: 12px; font-weight: 600; border-radius: 10px; transition: background .18s, box-shadow .18s, border-color .18s, transform .12s; }
+.button.ai-action > svg { flex-shrink: 0; }
+.button.ai-action > svg:last-child { transition: transform .18s; }
+.button.ai-action:hover:not(:disabled) > svg:last-child { transform: translateX(2px); }
+.button.ai-action:active:not(:disabled) { transform: translateY(1px); }
 @media(max-width:600px) {
   .translation-assist { align-items: flex-start; flex-direction: column; gap: 10px; padding: 12px 14px; }
   .translation-assist-actions { gap: 12px; }
   .export-notice .translation-assist-actions { width: 100%; }
+  .button.ai-action { min-height: 44px; }
+  .review-summary .ai-action { width: 100%; margin-left: 0; }
+  .translation-assist > .translation-assist-actions { width: 100%; }
+  .translation-assist-actions .ai-action { flex: 1 1 100%; }
 }
 @media(max-width:360px) { .header-nav button { font-size: 0; gap: 0; width: 27px; } .header-nav small { display: none; } }
 
