@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { compileHotwords, compileTranslations } from '../shared/compiler';
 import { outputStatus } from '../shared/review';
+import { translationSelectionStatus } from '../shared/translation-review';
 import { CandidateSchema, type Candidate } from '../shared/schema';
 const term = (id: string, source: string, target: string, patch: Partial<Candidate> = {}): Candidate => ({ id, source, target, category: 'industry', priority: 70, basis: 'source', evidence: '', location: '', hot: true, translation: true, pinned: false, ...patch });
 describe('真实导出状态', () => {
@@ -44,5 +45,22 @@ describe('真实导出状态', () => {
   });
   it('旧 JSON 项目无需新字段也可恢复', () => {
     expect(CandidateSchema.parse(term('old','原词','Term'))).toMatchObject({source:'原词',target:'Term'});
+  });
+  it('加入动作预先检查实际文件，待确认译法无需先取消再勾选', () => {
+    const pending = term('pending','产业协同','Industrial Collaboration',{translation:false});
+    expect(translationSelectionStatus([pending],pending.id)).toMatchObject({label:'已纳入',attention:false});
+    expect(pending.translation).toBe(false);
+    const selected = {...pending,translation:true};
+    expect(compileTranslations([selected]).content).toBe('产业协同-Industrial Collaboration');
+    const same = {...pending,target:pending.source};
+    expect(translationSelectionStatus([same],same.id)).toMatchObject({attention:true,adjustment:'content'});
+    const conflict = {...selected,id:'other',target:'Another Translation'};
+    expect(translationSelectionStatus([pending,conflict],pending.id)?.reasons.join('；')).toContain('不同译文');
+  });
+  it('加入动作沿用语言与字符预算检查，不能显示虚假的加入成功', () => {
+    const oversized = term('large','术语','Term '.repeat(4200),{translation:false});
+    expect(translationSelectionStatus([oversized],oversized.id)).toMatchObject({attention:true,adjustment:'budget'});
+    const wrongLanguage = term('language','人工智能','机器智能',{translation:false});
+    expect(translationSelectionStatus([wrongLanguage],wrongLanguage.id,false,{source:'zh',target:'de'})?.reasons.join('；')).toContain('德语');
   });
 });

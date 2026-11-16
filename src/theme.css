@@ -21,6 +21,9 @@
 .term-output-notice p { margin: 3px 0 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .term-output-notice .button { flex-shrink: 0; min-height: 34px; }
 .term-edit-help { color: var(--muted); font-size: 11px; line-height: 1.8; }
+.button.translation-join-button { min-height: 34px; font-size: 11px; }
+.translation-join-step { font-weight: 550; }
+.translation-join-blocked { margin: 12px 0; color: #94673b; font-size: 11px; line-height: 1.8; }
 @media(max-width:600px) {
   .translation-assist { align-items: flex-start; flex-direction: column; gap: 10px; padding: 12px 14px; }
   .translation-assist-actions { gap: 12px; }
@@ -34,6 +37,8 @@
   .term-output-notice { flex-wrap: wrap; gap: 8px; padding: 10px; }
   .term-output-notice > div { flex-basis: calc(100% - 22px); }
   .term-output-notice .button { margin-left: 22px; min-height: 40px; }
+  .button.translation-join-button { min-height: 40px; }
+  .floating-actions { position: static; }
 }
 @media(max-width:420px) { .term-head, .term-row { grid-template-columns: 15px minmax(0, 1fr) minmax(0, 1fr) 21px; } }
 @media(max-width:360px) { .header-nav button { font-size: 0; gap: 0; width: 27px; } .header-nav small { display: none; } }
@@ -70,6 +75,7 @@
 :root[data-theme='dark'] :is(.risk-note, .pin-label, .output-status.limited, .warnings .disclosure-trigger, .warnings ul) { color: #d0bfdc; }
 :root[data-theme='dark'] .term-output-notice { background: #302938; border-color: #665278; color: #d0bfdc; }
 :root[data-theme='dark'] .term-status.limited { color: #d0bfdc; }
+:root[data-theme='dark'] .translation-join-blocked { color: #d0bfdc; }
 :root[data-theme='dark'] :is(.error-text, .remove-term) { color: #e3afa9; }
 :root[data-theme='dark'] :is(.export-notice, .example-alert) { background: #2d2735; border-color: #51455f; color: #d0bfdc; }
 :root[data-theme='dark'] .alert.error { background: #322628; border-color: #624447; color: #e3b4ad; }

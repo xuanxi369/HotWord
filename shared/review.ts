@@ -25,7 +25,7 @@ export function outputIndex(compiled: Compiled) {
   return byId;
 }
 export function outputStatus(c: Candidate, compiled: Pick<Compiled, 'included' | 'excluded'>, kind: 'hot' | 'translation'): OutputStatus {
-  if (!(kind === 'hot' ? c.hot : c.translation)) return { label: kind === 'translation' && c.target ? '待确认' : '未选择', detail: kind === 'translation' && c.target ? '勾选指定翻译后再纳入导出' : '未选择此文件', attention: false, reasons: [] };
+  if (!(kind === 'hot' ? c.hot : c.translation)) return { label: kind === 'translation' && c.target ? '待确认' : '未选择', detail: kind === 'translation' && c.target ? '点击“加入指定翻译”完成确认并纳入导出' : '未选择此文件', attention: false, reasons: [] };
   const included = compiled.included.filter(e => e.id === c.id);
   const issues = compiled.excluded.filter(e => e.id === c.id && e.reason !== '重复条目');
   const details = issues.map(e => `${e.term}：${e.reason}`);

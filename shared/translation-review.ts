@@ -1,6 +1,18 @@
 import type { Candidate } from './schema';
 import { termIssue } from './term-quality';
-import { termKey } from './compiler';
+import { compileTranslations, termKey } from './compiler';
+import { compileMultilingualTranslations } from './multilingual-compiler';
+import type { LanguagePair } from './languages';
+import { outputStatus } from './review';
+
+export function translationSelectionStatus(candidates: Candidate[], id: string, bidirectional = false, languagePair?: LanguagePair) {
+  const candidate = candidates.find(c => c.id === id);
+  if (!candidate) return undefined;
+  const selected = { ...candidate, translation: true };
+  const proposed = candidates.map(c => c.id === id ? selected : c);
+  const compiled = languagePair ? compileMultilingualTranslations(proposed, bidirectional, languagePair) : compileTranslations(proposed, bidirectional);
+  return outputStatus(selected, compiled, 'translation');
+}
 
 export function adoptableTranslations(candidates: Candidate[]) {
   const targets=new Map<string,Set<string>>();
