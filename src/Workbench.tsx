@@ -174,6 +174,7 @@ export default function Workbench({ page: workbenchPage, active, session, theme,
     return () => { parseWorker.current?.terminate(); };
   }, []);
   useEffect(() => { if (session.userError) setError(session.userError); }, [session.userError]);
+  useEffect(() => { if (active && session.selectionNotice) { setError(session.selectionNotice); setModelOpen(true); } }, [active, session.selectionNotice]);
   useEffect(() => { if (active) refreshJobs().catch(() => {}); }, [active]);
   useEffect(() => {
     if (!activeJob || !['queued', 'running'].includes(activeJob.status)) return;
@@ -249,6 +250,7 @@ export default function Workbench({ page: workbenchPage, active, session, theme,
     try {
     setHistoryOpen(false);
     setName(job.name); setActiveJob(job); setError(''); setParsed(undefined); setSelected([]); setCandidates([]); setReviewReady(false); setWarnings([]); setExample(false); setStage(1); setToast(undefined);
+    await session.restoreJobSelection(job);
     if (job.status === 'failed') setError(job.error || '任务失败，请重新上传资料后重试');
     if (job.status === 'completed') {
       try { const result = await api<ExtractionResult>(`/api/jobs/${job.id}/result`); ready(result.candidates, result.warnings); }

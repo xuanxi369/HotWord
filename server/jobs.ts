@@ -11,11 +11,12 @@ import { deleteObjects, price, releaseTask, type Pricing } from './store';
 import type { Env } from './env';
 import { LanguagePairSchema, type LanguagePair } from '../shared/languages';
 
-export const jobColumns = 'id,name,status,progress,total,error,created_at,mode,provider,model,service_name,input_tokens,output_tokens,estimated_usd,usage_estimated,language_pair';
-export type StoredJob = Job & { language_pair?: string | null };
+export const jobColumns = 'id,name,status,progress,total,error,created_at,mode,provider,model,service_name,input_tokens,output_tokens,estimated_usd,usage_estimated,language_pair,service_id,credential_id';
+export type StoredJob = Job & { language_pair?: string | null; service_id?: string | null; credential_id?: string | null };
 export function decodeJob(row: StoredJob): Job {
-  const { language_pair, ...job } = row;
-  return language_pair ? { ...job, languagePair: LanguagePairSchema.parse(JSON.parse(language_pair)) } : job;
+  const { language_pair, service_id, credential_id, ...job } = row;
+  return { ...job, ...(language_pair ? { languagePair: LanguagePairSchema.parse(JSON.parse(language_pair)) } : {}),
+    ...(service_id ? { serviceId: service_id } : {}), ...(credential_id ? { credentialId: credential_id } : {}) };
 }
 export async function ownedJob(env: Env, id: string, owner: string) {
   const job = await env.DB.prepare(`SELECT ${jobColumns} FROM jobs WHERE id=? AND owner=? AND expires_at>?`).bind(id, owner, Date.now()).first<StoredJob>();

@@ -70,19 +70,34 @@ export function resolveTranslationConflicts(candidates:Candidate[]) {
 }
 
 export async function completeTranslations(env:Env,config:ModelConfig,key:string,candidates:Candidate[],context:string,beforeCall:(text:string)=>Promise<void>,record:(usage:TokenUsage)=>Promise<void>,languagePair?:LanguagePair):Promise<ExtractionResult> {
-  // Preserve confirmed source mappings; only invoke AI where a translation still needs work.
-  if(candidates.every(c=>c.translation && c.target)) return {candidates,warnings:[],...(languagePair?{languagePair}:{})};
-  const call=async (prompt:string,text:string,schema:object)=>{
+  const pending=candidates.filter(c=>!(c.translation && c.target));
+  if(!pending.length) return {candidates,warnings:[],...(languagePair?{languagePair}:{})};
+  // Bound inference work independently of the larger extraction chunk budget.
+  const batchSize=Math.max(1,Math.min(config.provider==='cloudflare'?12:24,Math.floor((config.maxOutputTokens-256)/160)));
+  const completed=new Map<string,Candidate>();
+  const call=async (prompt:string,text:string,schema:object,rows:number)=>{
     let usage:TokenUsage|undefined;
-    try {await beforeCall(text);const reply=await invokeModel(env,config,key,prompt,text,schema);usage=reply.usage;return parseModelJson(reply.value,usage);}
+    const callConfig=config.provider==='cloudflare'?{...config,maxOutputTokens:Math.min(config.maxOutputTokens,Math.max(1024,rows*256+256))}:config;
+    try {await beforeCall(text);const reply=await invokeModel(env,callConfig,key,prompt,text,schema);usage=reply.usage;return parseModelJson(reply.value,usage);}
     catch(e){if(e instanceof ModelError)usage=e.usage;throw e;}
     finally{if(usage)await record(usage);}
   };
-  const input=JSON.stringify({...(languagePair?{languagePair}:{}),context,terms:candidates.map(c=>({id:c.id,source:c.source,target:c.target,category:c.category,evidence:c.evidence,basis:c.basis,confirmed:c.translation}))});
-  let proposed:Candidate[];
-  try{proposed=prepareTranslations(await call(languagePair?multilingualTranslationPrompt(languagePair):translationPrompt,input,proposalSchema),candidates,context,languagePair);}
-  catch(e){if(e instanceof ModelError)throw e;throw new ModelError('指定翻译补全格式异常，请调整模型或重试',false);}
-  const verifyInput=JSON.stringify({...(languagePair?{languagePair}:{}),context,terms:proposed.map(c=>({id:c.id,source:c.source,target:c.target,category:c.category,evidence:c.evidence,targetEvidence:c.targetEvidence,basis:c.basis,doubt:c.translationReview}))});
-  try{return {candidates:resolveTranslationConflicts(approveTranslations(await call(languagePair?multilingualVerificationPrompt(languagePair):verificationPrompt,verifyInput,verdictSchema),proposed,candidates,languagePair)),warnings:[],...(languagePair?{languagePair}:{})};}
-  catch(e){if(e instanceof ModelError)throw e;throw new ModelError('指定翻译复核格式异常，请调整模型或重试',false);}
+  for(let start=0;start<pending.length;start+=batchSize) {
+    const batch=pending.slice(start,start+batchSize);
+    const input=JSON.stringify({...(languagePair?{languagePair}:{}),context,terms:batch.map(c=>({id:c.id,source:c.source,target:c.target,category:c.category,evidence:c.evidence,basis:c.basis,confirmed:c.translation}))});
+    let proposed:Candidate[];
+    try{proposed=prepareTranslations(await call(languagePair?multilingualTranslationPrompt(languagePair):translationPrompt,input,proposalSchema,batch.length),batch,context,languagePair);}
+    catch(e){if(e instanceof ModelError)throw e;throw new ModelError('指定翻译补全格式异常，请调整模型或重试',false);}
+    const verifiable=proposed.filter(c=>c.target && !c.translationReview);
+    if(verifiable.length) {
+      const verifyInput=JSON.stringify({...(languagePair?{languagePair}:{}),context,terms:verifiable.map(c=>({id:c.id,source:c.source,target:c.target,category:c.category,evidence:c.evidence,targetEvidence:c.targetEvidence,basis:c.basis}))});
+      try {
+        const approved=approveTranslations(await call(languagePair?multilingualVerificationPrompt(languagePair):verificationPrompt,verifyInput,verdictSchema,verifiable.length),verifiable,batch,languagePair);
+        const byId=new Map(approved.map(c=>[c.id,c]));
+        proposed=proposed.map(c=>byId.get(c.id)??c);
+      } catch(e){if(e instanceof ModelError)throw e;throw new ModelError('指定翻译复核格式异常，请调整模型或重试',false);}
+    }
+    for(const candidate of proposed) completed.set(candidate.id,candidate);
+  }
+  return {candidates:resolveTranslationConflicts(candidates.map(c=>completed.get(c.id)??c)),warnings:[],...(languagePair?{languagePair}:{})};
 }

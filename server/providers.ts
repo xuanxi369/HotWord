@@ -3,8 +3,9 @@ import { HttpError } from './auth';
 import type { Env } from './env';
 
 export type TokenUsage = { input: number; output: number; estimated: boolean };
+type ModelDiagnostic = { kind: 'timeout' | 'configuration' | 'authentication' | 'rate_limit' | 'unavailable'; code?: string; status?: number };
 export class ModelError extends HttpError {
-  constructor(message: string, public retryable = false, public usage?: TokenUsage, status = 502) { super(status, message); }
+  constructor(message: string, public retryable = false, public usage?: TokenUsage, status = 502, public diagnostic?: ModelDiagnostic) { super(status, message); }
 }
 export class OutputLimitError extends ModelError {
   constructor(message: string, usage?: TokenUsage) { super(message, false, usage); }
@@ -24,6 +25,10 @@ function usageOf(raw: any, fallback: TokenUsage): TokenUsage {
 }
 export function buildRequest(c: ModelConfig, system: string, text: string, schema?: object, probe = false) {
   const cap = probe ? 128 : c.maxOutputTokens;
+  if (c.provider === 'cloudflare') return { messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
+    ...(!probe && c.outputMode !== 'prompt' ? { response_format: c.outputMode === 'json_schema'
+      ? { type: 'json_schema', json_schema: { name: 'conference_terms', schema, strict: true } } : { type: 'json_object' } } : {}),
+    max_completion_tokens: cap, reasoning_effort: 'low', stream: false, store: false };
   if (c.provider === 'openai') return { model: c.model, instructions: system, input: text, max_output_tokens: cap, store: false,
     ...(!probe && c.outputMode !== 'prompt' ? { text: { format: c.outputMode === 'json_schema' ? { type: 'json_schema', name: 'conference_terms', strict: true, schema } : { type: 'json_object' } } } : {}) };
   if (c.provider === 'claude') return { model: c.model, system, messages: [{ role: 'user', content: text }], max_tokens: cap, stream: false };
@@ -35,6 +40,36 @@ export function buildRequest(c: ModelConfig, system: string, text: string, schem
     if (['deepseek', 'zhipu'].includes(c.provider)) body.thinking = { type: c.thinking };
   }
   return body;
+}
+function cloudflareFailure(error: unknown, usage: TokenUsage): ModelError {
+  const messages: string[] = [];
+  let code: string | undefined, status: number | undefined, current = error;
+  for (let depth = 0; depth < 3 && current; depth++) {
+    if (typeof current === 'string') { messages.push(current); break; }
+    if (typeof current !== 'object') break;
+    const detail = current as { message?: unknown; name?: unknown; code?: unknown; status?: unknown; statusCode?: unknown; cause?: unknown; errors?: { code?: unknown }[] };
+    if (typeof detail.message === 'string') messages.push(detail.message);
+    if (typeof detail.name === 'string') messages.push(detail.name);
+    const rawCode = detail.code ?? detail.errors?.[0]?.code;
+    if (!code && (typeof rawCode === 'number' || typeof rawCode === 'string') && /^(?:\d{3,6}|(?:AI|ERR|CLOUDFLARE)_[A-Z0-9_]{1,24})$/i.test(String(rawCode))) code = String(rawCode);
+    const rawStatus = detail.status ?? detail.statusCode ?? (typeof rawCode === 'number' && rawCode >= 400 && rawCode <= 599 ? rawCode : undefined);
+    const numericStatus = typeof rawStatus === 'number' || typeof rawStatus === 'string' && /^\d{3}$/.test(rawStatus) ? Number(rawStatus) : undefined;
+    if (!status && numericStatus && Number.isInteger(numericStatus) && numericStatus >= 400 && numericStatus <= 599) status = numericStatus;
+    current = detail.cause;
+  }
+  const detail = messages.join(' ');
+  if (!code) { const match = detail.match(/(?:code|error)(?:\s+code)?\s*[:=]?\s*(\d{3,6})\b|(?:^|\s)(\d{4,6})\s*:/i); code = match?.[1] ?? match?.[2]; }
+  let kind: ModelDiagnostic['kind'] = 'unavailable', message = 'Cloudflare 模型服务暂时不可用，请稍后重试或手动选择其他服务', retryable = !status || status >= 500;
+  if (status === 408 || status === 504 || /timeout|timed out|deadline|超时/i.test(detail)) {
+    kind = 'timeout'; message = 'Cloudflare 模型请求超时，请稍后重试或手动选择其他服务'; retryable = true;
+  } else if (status === 401 || status === 403) {
+    kind = 'authentication'; message = 'Cloudflare 模型调用权限不足，请检查账号与模型权限'; retryable = false;
+  } else if (status === 402 || status === 429) {
+    kind = 'rate_limit'; message = 'Cloudflare 模型请求频率或账号用量暂受限，请稍后重试或检查账号'; retryable = status === 429;
+  } else if (status === 400 || status === 404 || /invalid.*(?:parameter|schema)|validation|json_schema|unsupported.*(?:parameter|format)|missing.*name/i.test(detail)) {
+    kind = 'configuration'; message = 'Cloudflare 模型参数或结构化输出格式不匹配，请检查模型配置'; retryable = false;
+  }
+  return new ModelError(message + (code ? `（错误码 ${code}）` : ''), retryable, usage, 502, { kind, ...(code ? { code } : {}), ...(status ? { status } : {}) });
 }
 export function decodeReply(c: ModelConfig, raw: any, fallback: TokenUsage): { value: unknown; usage: TokenUsage } {
   const usage = usageOf(raw, fallback);
@@ -82,12 +117,15 @@ export async function invokeModel(env: Env, c: ModelConfig, key: string, system:
   const fallback: TokenUsage = { input: system.length + text.length + 256, output: probe ? 128 : c.maxOutputTokens, estimated: true };
   let raw: unknown;
   if (c.provider === 'cloudflare') {
+    const started = Date.now();
     try {
       const run = env.AI.run.bind(env.AI) as unknown as (model: string, input: Record<string, unknown>) => Promise<unknown>;
-      raw = await run(c.model, { messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
-        ...(!probe && c.outputMode !== 'prompt' ? { response_format: { type: c.outputMode, ...(c.outputMode === 'json_schema' ? { json_schema: schema } : {}) } } : {}),
-        max_completion_tokens: probe ? 128 : c.maxOutputTokens, reasoning_effort: 'low', stream: false, store: false });
-    } catch { throw new ModelError('Cloudflare 模型调用失败，请检查账号额度和模型配置', true, fallback); }
+      raw = await run(c.model, buildRequest(c, system, text, schema, probe));
+    } catch (error) {
+      const failure = cloudflareFailure(error, fallback);
+      console.error('cloudflare_ai_call_failed', { model: c.model, durationMs: Date.now() - started, ...failure.diagnostic });
+      throw failure;
+    }
   } else {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (c.provider === 'claude') { headers['x-api-key'] = key; headers['anthropic-version'] = '2023-06-01'; if (c.workspace) headers['anthropic-workspace-id'] = c.workspace; }
