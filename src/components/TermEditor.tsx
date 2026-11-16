@@ -23,29 +23,33 @@ function TermEditorForm({ candidate, candidates, pair, bidirectional, busy, init
   const [categoryReviewed, setCategoryReviewed] = useState(false);
   const textChanged = draft.source !== candidate.source || draft.target !== candidate.target;
   const edited = useMemo(() => applyCandidatePatch(candidate, {
-    source: draft.source, target: draft.target, priority: draft.priority, pinned: draft.pinned,
+    source: draft.source, target: draft.target, priority: draft.priority, pinned: draft.pinned, translationForced: !!draft.translationForced,
     ...(draft.category !== candidate.category ? { category: draft.category } : {}),
     ...(categoryReviewed && draft.category === candidate.category ? { reviewReason: undefined, categoryEvidence: '已手动核对类别' } : {}),
     ...(textChanged ? { basis: 'manual' } : {}),
   }), [candidate, draft, categoryReviewed, textChanged]);
-  const selection = useMemo(() => translationSelectionStatus(candidates.map(c => c.id === edited.id ? edited : c), edited.id, bidirectional, pair), [candidates, edited, bidirectional, pair]);
+  const proposed = useMemo(() => candidates.map(c => c.id === edited.id ? edited : c), [candidates, edited]);
+  const normalSelection = useMemo(() => translationSelectionStatus(proposed, edited.id, bidirectional, pair, false), [proposed, edited.id, bidirectional, pair]);
+  const forcedSelection = useMemo(() => normalSelection?.attention ? translationSelectionStatus(proposed, edited.id, bidirectional, pair, true) : normalSelection, [proposed, edited.id, bidirectional, pair, normalSelection]);
+  const selection = draft.translationForced ? forcedSelection : normalSelection;
+  const canForce = Boolean(draft.target.trim() && normalSelection?.attention && forcedSelection && !forcedSelection.attention);
   const canJoin = Boolean(draft.target.trim() && selection && !selection.attention);
-  const shouldJoin = canJoin && !edited.translation;
-  const action = shouldJoin ? '保存并加入指定翻译' : '保存修改';
+  const shouldJoin = canJoin && (!edited.translation || (!!edited.translationForced && !candidate.translationForced));
+  const action = shouldJoin ? draft.translationForced ? '保存并强制加入' : '保存并加入指定翻译' : '保存修改';
   function save() {
     if (busy || !draft.source.trim()) return;
-    const next = shouldJoin ? applyCandidatePatch(edited, { translation: true }) : edited;
+    const next = shouldJoin ? applyCandidatePatch(edited, { translation: true }) : candidate.translationForced && !edited.translationForced && !canJoin ? applyCandidatePatch(edited, { translation: false }) : edited;
     onSave(next, shouldJoin);
   }
   return <form className="term-editor-form" onSubmit={event => { event.preventDefault(); save(); }} onKeyDown={event => {
     if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
   }}>
     <div className="term-edit-fields">
-      <label>原词<input ref={initialField === 'source' ? initialFocus : undefined} required dir={pair ? languageDirection(pair.source) : undefined} lang={pair?.source} aria-label={`详细原词 ${candidate.source}`} maxLength={180} value={draft.source} onChange={event => setDraft(current => ({ ...current, source: event.target.value }))}/></label>
-      <label>译文<input ref={initialField === 'target' ? initialFocus : undefined} dir={pair ? languageDirection(pair.target) : undefined} lang={pair?.target} aria-label={`详细译文 ${candidate.source}`} maxLength={180} value={draft.target} onChange={event => setDraft(current => ({ ...current, target: event.target.value }))} placeholder="填写对应译名"/></label>
+      <label>原词<input ref={initialField === 'source' ? initialFocus : undefined} required dir={pair ? languageDirection(pair.source) : undefined} lang={pair?.source} aria-label={`详细原词 ${candidate.source}`} maxLength={180} value={draft.source} onChange={event => setDraft(current => ({ ...current, source: event.target.value, translationForced: false }))}/></label>
+      <label>译文<input ref={initialField === 'target' ? initialFocus : undefined} dir={pair ? languageDirection(pair.target) : undefined} lang={pair?.target} aria-label={`详细译文 ${candidate.source}`} maxLength={180} value={draft.target} onChange={event => setDraft(current => ({ ...current, target: event.target.value, translationForced: false }))} placeholder="填写对应译名"/></label>
       <label>类别<select aria-label={`类别 ${candidate.source}`} value={draft.category} onChange={event => setDraft(current => ({ ...current, category: event.target.value as Category }))}>{Object.entries(categoryNames).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select></label>
     </div>
-    {draft.target.trim() && selection?.attention && <div className="term-editor-issue"><AlertTriangle size={14}/><p>此译法暂不能加入：{selection.reasons.join('；')}。可以先保存修改。</p></div>}
+    {draft.target.trim() && normalSelection?.attention && <div className="term-editor-issue"><AlertTriangle size={14}/><div><p>此译法暂不能加入：{normalSelection.reasons.join('；')}。可以先保存修改。</p>{(canForce || draft.translationForced) && <div className="term-force-choice"><Switch checked={!!draft.translationForced} onChange={translationForced => setDraft(current => ({ ...current, translationForced }))} label="强制加入指定翻译" disabled={busy}/><p>已知以上原因，仍按客户要求加入。</p></div>}{draft.translationForced && selection?.attention && <p>强制项仍未纳入：{selection.reasons.join('；')}。</p>}</div></div>}
     <details className="term-editor-details"><summary>原文与核对依据</summary>
       <div className="evidence-card"><span className="small-kicker">{candidate.location || '手动录入'}</span><p>{candidate.evidence || '这个词条由你手动添加。'}</p></div>
       <div className="classification-note"><p>类别依据：{edited.categoryEvidence || '原表与规则识别'}</p>{candidate.riskReason && <p>易误译：{candidate.riskReason}</p>}{candidate.targetEvidence && <p>译名依据：{candidate.targetEvidence}</p>}{candidate.translationReview && <p>译法待核对：{candidate.translationReview}</p>}{edited.reviewReason && <><p>类别待核对：{edited.reviewReason}</p><button type="button" className="text-button" onClick={() => setCategoryReviewed(true)}>类别已核对<Check size={13}/></button></>}</div>

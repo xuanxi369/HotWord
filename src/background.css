@@ -1,0 +1,40 @@
+/* Background colors and drift paths ported from Aegis-AI's holographic orbs. */
+:root { background: #f8fafc; }
+:root[data-theme='dark'] { background: #080c17; }
+#root { isolation: isolate; }
+.ambient-background { position: fixed; inset: 0; z-index: -1; background: #f8fafc; overflow: hidden; pointer-events: none; transition: background-color .5s ease; }
+.ambient-layer { position: absolute; inset: 0; will-change: transform; }
+.ambient-orb { position: absolute; border-radius: 50%; filter: blur(100px); opacity: .45; will-change: transform; }
+.ambient-blue { width: 60vw; height: 60vw; background: #3b82f6; top: -15%; left: -10%; animation: ambient-drift-blue 25s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
+.ambient-pink { width: 50vw; height: 50vw; background: #ec4899; bottom: -15%; right: -10%; animation: ambient-drift-pink 30s infinite cubic-bezier(.4, 0, .2, 1) alternate-reverse; }
+.ambient-mint { width: 45vw; height: 45vw; background: #10b981; top: 25%; left: 25%; animation: ambient-drift-mint 20s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
+
+@keyframes ambient-drift-blue {
+  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  33% { transform: translate(15vw, 10vh) scale(1.1) rotate(10deg); }
+  66% { transform: translate(-5vw, 15vh) scale(.95) rotate(-5deg); }
+  100% { transform: translate(-10vw, -5vh) scale(1.05) rotate(5deg); }
+}
+@keyframes ambient-drift-pink {
+  0% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(-15vw, -10vh) scale(1.15); }
+  50% { transform: translate(10vw, -15vh) scale(.95); }
+  75% { transform: translate(5vw, 10vh) scale(1.05); }
+  100% { transform: translate(-5vw, 5vh) scale(1); }
+}
+@keyframes ambient-drift-mint {
+  0% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(20vw, -15vh) scale(1.2); }
+  66% { transform: translate(-10vw, 15vh) scale(.85); }
+  100% { transform: translate(15vw, 5vh) scale(1.1); }
+}
+
+:root[data-theme='dark'] .ambient-background { background: #080c17; }
+:root[data-theme='dark'] .ambient-orb { opacity: .35; filter: blur(120px); }
+.ambient-background[data-paused='true'] .ambient-orb { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .ambient-background { transition: none; }
+  .ambient-layer { transform: none !important; will-change: auto; }
+  .ambient-orb { animation: none; will-change: auto; }
+}
+@media print { .ambient-background { display: none; } }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Workbench, { type WorkbenchPage, type WorkbenchTransfer } from './Workbench';
 import { applyTheme, currentTheme } from './theme';
 import { useWorkspaceSession } from './useWorkspaceSession';
+import { AmbientBackground } from './components/AmbientBackground';
 
 const currentPage = (): WorkbenchPage => window.location.pathname.replace(/\/$/, '') === '/multilingual' ? 'multilingual' : 'conference';
 
@@ -27,6 +28,7 @@ export default function App() {
     setPage(target);
   }
   return <>
+    <AmbientBackground/>
     <Workbench page="conference" active={page === 'conference'} session={session} theme={theme} setTheme={setTheme}
       transfer={transfer} targetBusy={busy.multilingual} navigate={navigate} onAvailabilityChange={onAvailabilityChange}/>
     <Workbench page="multilingual" active={page === 'multilingual'} session={session} theme={theme} setTheme={setTheme}

@@ -5,10 +5,10 @@ import { compileMultilingualTranslations } from './multilingual-compiler';
 import type { LanguagePair } from './languages';
 import { outputStatus } from './review';
 
-export function translationSelectionStatus(candidates: Candidate[], id: string, bidirectional = false, languagePair?: LanguagePair) {
+export function translationSelectionStatus(candidates: Candidate[], id: string, bidirectional = false, languagePair?: LanguagePair, force?: boolean) {
   const candidate = candidates.find(c => c.id === id);
   if (!candidate) return undefined;
-  const selected = { ...candidate, translation: true };
+  const selected = { ...candidate, translation: true, translationForced: force ?? candidate.translationForced };
   const proposed = candidates.map(c => c.id === id ? selected : c);
   const compiled = languagePair ? compileMultilingualTranslations(proposed, bidirectional, languagePair) : compileTranslations(proposed, bidirectional);
   return outputStatus(selected, compiled, 'translation');

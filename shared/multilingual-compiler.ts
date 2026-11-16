@@ -36,13 +36,22 @@ export function compileMultilingualHotwords(candidates: Candidate[], languagePai
 
 export function compileMultilingualTranslations(candidates: Candidate[], bidirectional = false, languagePair?: LanguagePair): Compiled {
   const excluded: Exclusion[] = [], errors: string[] = [], eligible: Candidate[] = [];
+  const overrides: { id: string; reason: string }[] = [];
   for (const candidate of candidates) {
     const issue = candidate.translation && (multilingualTermIssue(candidate.source) || (languagePair && multilingualLanguageIssue(candidate.source, languagePair.source))
       || (candidate.target && (multilingualTermIssue(candidate.target) || (languagePair && multilingualLanguageIssue(candidate.target, languagePair.target)))));
-    if (issue) {
+    if (issue && !candidate.translationForced) {
       excluded.push({ id: candidate.id, term: candidate.source, reason: issue });
       if (candidate.pinned) errors.push('必须保留指定翻译包含非术语内容，请修正或取消必须保留');
-    } else eligible.push(candidate);
+    } else {
+      eligible.push(candidate);
+      if (issue) overrides.push({ id: candidate.id, reason: issue });
+    }
   }
-  return withQuality(compileTranslations(eligible, bidirectional), excluded, errors, joiningNotes(eligible, 'translation'));
+  const result = withQuality(compileTranslations(eligible, bidirectional), excluded, errors, joiningNotes(eligible, 'translation'));
+  const byId = new Map<string, Compiled['included']>();
+  for (const entry of result.included) { const group = byId.get(entry.id) ?? []; group.push(entry); byId.set(entry.id, group); }
+  const forced = [...(result.forced ?? []), ...overrides.flatMap(override => (byId.get(override.id) ?? []).map(entry => ({ ...override, term: entry.term })))];
+  if (forced.length) result.forced = [...new Map(forced.map(entry => [JSON.stringify([entry.id, entry.term, entry.reason]), entry])).values()];
+  return result;
 }

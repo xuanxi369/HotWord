@@ -23,6 +23,7 @@ export const CandidateSchema = z.object({
   riskReason: z.string().max(240).optional(),
   categoryEvidence: z.string().max(240).optional(),
   translationAuto: z.boolean().optional(),
+  translationForced: z.boolean().optional(),
   translationReview: z.string().max(240).optional(),
   targetEvidence: z.string().max(400).optional(),
 });

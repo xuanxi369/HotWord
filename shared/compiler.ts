@@ -14,7 +14,7 @@ export function normalizeTerm(value: string): string {
 export const termKey = (value: string) => normalizeTerm(value).toLocaleLowerCase('en-US');
 export const fileText = (content: string) => '\uFEFF' + content + '\r\n';
 export type Exclusion = { id: string; term: string; reason: string };
-export type Compiled = { content: string; count: number; chars: number; included: { id: string; term: string; reused: boolean }[]; excluded: Exclusion[]; errors: string[]; changes: string[] };
+export type Compiled = { content: string; count: number; chars: number; included: { id: string; term: string; reused: boolean }[]; excluded: Exclusion[]; errors: string[]; changes: string[]; forced?: Exclusion[] };
 type Entry = { id: string; term: string; key: string; pinned: boolean; rank: number };
 const weights = { person: 500, place: 400, company: 300, product: 200, industry: 100, other: 0 };
 
@@ -69,22 +69,27 @@ export function compileHotwords(candidates: Candidate[]): Compiled {
 }
 
 export function compileTranslations(candidates: Candidate[], bidirectional = false): Compiled {
-  const proposed: (Entry & { sourceKey: string; targetKey: string })[] = [];
+  const proposed: (Entry & { sourceKey: string; targetKey: string; forced: boolean; reasons: string[] })[] = [];
   const excluded: Exclusion[] = [], changes: string[] = [], qualityErrors: string[] = [];
   for (const c of candidates.filter(c => c.translation)) {
     const source = normalizeTerm(c.source), target = normalizeTerm(c.target);
     if (!source || !target) { excluded.push({ id: c.id, term: c.source, reason: '缺少原词或译文' }); continue; }
+    const reasons: string[] = [];
     const issue = termIssue(c.source) || termIssue(c.target);
-    if (issue) {
+    if (issue && !c.translationForced) {
       excluded.push({ id: c.id, term: c.source, reason: issue });
       if (c.pinned) qualityErrors.push('必须保留指定翻译包含非术语内容，请修正或取消必须保留');
       continue;
     }
+    if (issue) reasons.push(issue);
     if (source !== c.source) changes.push(`${c.source} → ${source}`);
     if (target !== c.target) changes.push(`${c.target} → ${target}`);
-    if (termKey(source) === termKey(target)) { excluded.push({ id: c.id, term: source, reason: '两端相同，无需锁定翻译' }); continue; }
+    if (termKey(source) === termKey(target)) {
+      if (!c.translationForced) { excluded.push({ id: c.id, term: source, reason: '两端相同，无需锁定翻译' }); continue; }
+      reasons.push('两端相同，无需锁定翻译');
+    }
     for (const [a, b] of bidirectional ? [[source, target], [target, source]] : [[source, target]]) {
-      proposed.push({ id: c.id, term: `${a}-${b}`, key: `${termKey(a)}\u0000${termKey(b)}`, sourceKey: termKey(a), targetKey: termKey(b), pinned: c.pinned, rank: weights[c.category] + c.priority });
+      proposed.push({ id: c.id, term: `${a}-${b}`, key: `${termKey(a)}\u0000${termKey(b)}`, sourceKey: termKey(a), targetKey: termKey(b), pinned: c.pinned, rank: weights[c.category] + c.priority, forced: !!c.translationForced, reasons: [...reasons] });
     }
   }
   const targets = new Map<string, Set<string>>();
@@ -94,18 +99,24 @@ export function compileTranslations(candidates: Candidate[], bidirectional = fal
   }
   const entries = proposed.filter(p => {
     if (targets.get(p.sourceKey)!.size > 1) {
+      if (p.forced) { p.reasons.push('同一原词对应不同译文，请选择一个译法'); return true; }
       excluded.push({ id: p.id, term: p.term, reason: '同一原词对应不同译文，请选择一个译法' }); return false;
     }
     return true;
   });
   const result = pack(entries, TRANSLATION_LIMIT, excluded, changes);
   result.errors.push(...new Set(qualityErrors));
-  if (proposed.some(p => p.pinned && targets.get(p.sourceKey)!.size > 1)) result.errors.push('必须保留指定翻译存在冲突，请先解决');
-  validateExport(result.content, 'translation');
+  if (proposed.some(p => p.pinned && !p.forced && targets.get(p.sourceKey)!.size > 1)) result.errors.push('必须保留指定翻译存在冲突，请先解决');
+  const included = new Set(result.included.map(entry => `${entry.id}\u0000${entry.term}`));
+  const forced = entries.filter(entry => entry.forced && included.has(`${entry.id}\u0000${entry.term}`))
+    .flatMap(entry => (entry.reasons.length ? entry.reasons : ['已按用户要求强制加入']).map(reason => ({ id: entry.id, term: entry.term, reason })));
+  if (forced.length) result.forced = [...new Map(forced.map(entry => [JSON.stringify([entry.id, entry.term, entry.reason]), entry])).values()];
+  validateExport(result.content, 'translation', forced.map(entry => entry.term));
   return result;
 }
 
-export function validateExport(content: string, kind: 'hot' | 'translation') {
+export function validateExport(content: string, kind: 'hot' | 'translation', forcedEntries: readonly string[] = []) {
+  const forced = new Set(kind === 'translation' ? forcedEntries : []);
   const limit = kind === 'hot' ? HOT_LIMIT : TRANSLATION_LIMIT;
   if (fileText(content).length > limit) throw new Error('导出超过字符上限');
   if (content && content.split('，').some(t => !t.trim())) throw new Error('出现空条目');
@@ -115,7 +126,7 @@ export function validateExport(content: string, kind: 'hot' | 'translation') {
     if (kind === 'hot' && /[\p{Pd}\u2212]/u.test(t)) throw new Error('热词内包含映射符');
     for (const term of kind === 'hot' ? [t] : t.split('-')) {
       const issue = termIssue(term);
-      if (issue) throw new Error(`导出包含非术语内容：${issue}`);
+      if (issue && !forced.has(t)) throw new Error(`导出包含非术语内容：${issue}`);
     }
   }
 }

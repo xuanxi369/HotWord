@@ -33,10 +33,10 @@ export function Switch({ checked, onChange, label, disabled = false }: { checked
     <span className="switch-track"><motion.span className="switch-thumb" animate={{ x: checked ? 18 : 0 }} transition={reduced ? { duration: 0 } : spring}><Check size={10}/></motion.span></span><span>{label}</span>
   </button>;
 }
-export function Toggle({ checked, onChange, label, text, disabled = false, pinned = false }: { checked: boolean; onChange: (value: boolean) => void; label: string; text?: string; disabled?: boolean; pinned?: boolean }) {
+export function Toggle({ checked, onChange, label, text, description, disabled = false, pinned = false }: { checked: boolean; onChange: (value: boolean) => void; label: string; text?: string; description?: string; disabled?: boolean; pinned?: boolean }) {
   const reduced = useReducedMotion();
   const check = <motion.span className="check-mark" animate={{ scale: checked ? 1 : 0, opacity: checked ? 1 : 0 }} transition={reduced ? { duration: 0 } : spring}><Check size={12} strokeWidth={3}/></motion.span>;
-  return <Tip text={label}><motion.button type="button" className={text ? 'checkbox-control' : `check-toggle ${checked ? 'checked' : ''} ${pinned ? 'pin-toggle' : ''}`} role="checkbox" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)} whileTap={disabled || reduced ? undefined : { scale: text ? .97 : .85 }} transition={reduced ? { duration: 0 } : spring}>
+  return <Tip text={description ?? label}><motion.button type="button" className={text ? 'checkbox-control' : `check-toggle ${checked ? 'checked' : ''} ${pinned ? 'pin-toggle' : ''}`} role="checkbox" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)} whileTap={disabled || reduced ? undefined : { scale: text ? .97 : .85 }} transition={reduced ? { duration: 0 } : spring}>
     {text ? <><span className={`check-toggle ${checked ? 'checked' : ''} ${pinned ? 'pin-toggle' : ''}`}>{check}</span><span>{text}</span></> : check}
   </motion.button></Tip>;
 }
