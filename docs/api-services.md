@@ -18,6 +18,8 @@
 
 保留原有 Workers AI 作为额外团队服务。推荐模型不保证每个账号均有权限；支持手动模型 ID、输出上限、上下文和思考设置。手动模型默认使用通用提示词 JSON。首版 Claude 通过提示词生成 JSON 再做严格校验，未假设所有模型支持统一的结构化输出参数。
 
+座次图识别可使用 DeepSeek `deepseek-flash`，官方 API 该名称对应支持图片输入的 V4.1-Flash-1017；旧 Flash 别名也兼容。`deepseek-v4-pro` 当前不支持图片。模型名称相近不表示能力相同，前后端共用具体 ID 的能力限制，其他 ID 交由服务商校验。[DeepSeek 官方视觉说明](https://api-docs.deepseek.com/guides/vision/)
+
 OpenAI API Key 来自开发者平台。Claude 支持 `anthropic-workspace-id`：绑定空间的密钥可以留空，未绑定的密钥须填工作空间。千问支持北京、新加坡、弗吉尼亚、法兰克福、东京、香港；后三个区域必须填业务空间 ID。填写空间后使用 `https://{WorkspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1`；前三个区域兼容现有 DashScope 地址。区域、模型、空间和密钥必须匹配，页面自动显示调用地址。后端拒绝第三方 Base URL、无效域名标签和重定向。
 
 连接测试发送简短合成文本，最多 128 输出 Token，不设每日次数上限，可能产生少量个人账户费用。界面按“测试连接 → 保存配置”操作，修改配置须重新测试。测试验证模型调用权限，实际提取另行校验 JSON 和原文依据。

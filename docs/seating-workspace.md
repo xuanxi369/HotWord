@@ -32,7 +32,11 @@ AI 只输出分区和单元格范围计划，不生成姓名。每个人以原�
 
 没有新增部署项目、访问口令、域名或数据库迁移。图片和所选表格只在识别调用中传给当前模型；本模块不把源文件或分析结果写入 D1/R2。D1 保留调用用量，草稿保留在本机。
 
-模型配置读取、文本连接测试与视觉识别是不同检查。已知文本模型会明确提示更换视觉模型。可使用已开放的 OpenAI/Claude 视觉模型，或在共享配置中选择千问 `qwen3-vl-plus`、智谱 `glm-4.6v`、Workers AI `@cf/meta/llama-3.2-11b-vision-instruct` 等视觉配置；实际可用性以账号开放模型和服务商返回为准。不会自动替换所选模型、模式或密钥。
+模型配置读取、文本连接测试与视觉识别是不同检查。`shared/vision.ts` 仅按官方已确认的具体模型 ID 提示文本模型限制，不按 DeepSeek、Flash、V4、Qwen Plus 或 GLM 版本前缀推断。未收录的模型由服务商校验图片调用，放行不表示其视觉能力已验证。
+
+DeepSeek 官方 `deepseek-flash` 对应 DeepSeek-V4.1-Flash-1017，支持图片与文本输入；继续填写 `deepseek-flash`，无需改成产品全名。旧别名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 也由新版 Flash 提供服务。使用现有 Chat Completions 的 `image_url` + Base64 图片协议。`deepseek-v4-pro` 当前不支持视觉，仍会在调用前提示。[官方视觉文档](https://api-docs.deepseek.com/guides/vision/) · [官方模型与别名说明](https://api-docs.deepseek.com/quick_start/pricing/)
+
+还可使用已开放的 OpenAI/Claude 视觉模型，或在共享配置中选择千问 `qwen3-vl-plus`、智谱 `glm-4.6v`、Workers AI `@cf/meta/llama-3.2-11b-vision-instruct` 等视觉配置；实际可用性以账号开放模型和服务商返回为准。不会自动替换所选模型、模式或密钥。
 
 每次 AI 调用最多等待 90 秒；失败不会生成部分结果，可重试或手动整理。返回计划需通过结构、范围重叠和原表引用校验，才进入人工核对页面。
 
