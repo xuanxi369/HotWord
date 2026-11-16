@@ -13,7 +13,7 @@ export function needsReview(c: Candidate) {
   return Boolean(c.reviewReason || c.translationReview || (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target));
 }
 
-export type OutputStatus = { label: string; detail: string; attention: boolean };
+export type OutputStatus = { label: string; detail: string; attention: boolean; reasons: string[]; adjustment?: 'content' | 'budget' };
 export function outputIndex(compiled: Compiled) {
   const byId = new Map<string, Pick<Compiled, 'included' | 'excluded'>>();
   for (const kind of ['included', 'excluded'] as const) for (const entry of compiled[kind]) {
@@ -25,10 +25,12 @@ export function outputIndex(compiled: Compiled) {
   return byId;
 }
 export function outputStatus(c: Candidate, compiled: Pick<Compiled, 'included' | 'excluded'>, kind: 'hot' | 'translation'): OutputStatus {
-  if (!(kind === 'hot' ? c.hot : c.translation)) return { label: kind === 'translation' && c.target ? '待确认' : '未选择', detail: kind === 'translation' && c.target ? '勾选指定翻译后再纳入导出' : '未选择此文件', attention: false };
+  if (!(kind === 'hot' ? c.hot : c.translation)) return { label: kind === 'translation' && c.target ? '待确认' : '未选择', detail: kind === 'translation' && c.target ? '勾选指定翻译后再纳入导出' : '未选择此文件', attention: false, reasons: [] };
   const included = compiled.included.filter(e => e.id === c.id);
   const issues = compiled.excluded.filter(e => e.id === c.id && e.reason !== '重复条目');
   const details = issues.map(e => `${e.term}：${e.reason}`);
-  if (included.length) return { label: issues.length ? '部分纳入' : included.every(e => e.reused) ? '已去重纳入' : '已纳入', detail: details.length ? details.join('；') : included.map(e => `${e.term}${e.reused ? '（与已有条目共用）' : ''}`).join('；'), attention: issues.length > 0 };
-  return { label: '未导出', detail: details.join('；') || '没有可导出的完整内容', attention: true };
+  const reasons = [...new Set(issues.map(e => e.reason))];
+  const adjustment = reasons.length ? reasons.every(reason => /预算|上限/.test(reason)) ? 'budget' : 'content' : undefined;
+  if (included.length) return { label: issues.length ? '部分纳入' : included.every(e => e.reused) ? '已去重纳入' : '已纳入', detail: details.length ? details.join('；') : included.map(e => `${e.term}${e.reused ? '（与已有条目共用）' : ''}`).join('；'), attention: issues.length > 0, reasons, adjustment };
+  return { label: '已选择，但未纳入', detail: details.join('；') || '没有可导出的完整内容', attention: true, reasons: reasons.length ? reasons : ['没有可导出的完整内容'], adjustment: adjustment ?? 'content' };
 }

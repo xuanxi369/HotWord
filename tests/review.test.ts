@@ -6,7 +6,7 @@ const term = (id: string, source: string, target: string, patch: Partial<Candida
 describe('真实导出状态', () => {
   it('热词预算不足不等于指定翻译未纳入，显示部分接受和完整接受', () => {
     const c = term('c','术语', 'English Phrase '.repeat(140));
-    expect(outputStatus(c,compileHotwords([c]),'hot')).toMatchObject({label:'部分纳入',attention:true});
+    expect(outputStatus(c,compileHotwords([c]),'hot')).toMatchObject({label:'部分纳入',attention:true,adjustment:'budget'});
     expect(outputStatus(c,compileTranslations([c]),'translation')).toMatchObject({label:'已纳入',attention:false});
   });
   it('重复词已在文件中时显示去重纳入，不制造未导出的假问题', () => {
@@ -20,7 +20,7 @@ describe('真实导出状态', () => {
     const a = term('a','词'.repeat(2046),''), b = {...a,id:'b'};
     const hot = compileHotwords([a,b]);
     expect(hot.included).toHaveLength(0);
-    expect(outputStatus(b,hot,'hot')).toMatchObject({label:'未导出',attention:true});
+    expect(outputStatus(b,hot,'hot')).toMatchObject({label:'已选择，但未纳入',attention:true,adjustment:'budget'});
     expect(hot.excluded.every(e=>e.reason.includes('预算'))).toBe(true);
   });
   it('区分未选择、待确认以及同一原词冲突', () => {
@@ -29,6 +29,18 @@ describe('真实导出状态', () => {
     const pending = {...a,translation:false};
     expect(outputStatus(pending,compileTranslations([pending]),'translation')).toMatchObject({label:'待确认',attention:false});
     expect(outputStatus({...a,hot:false},compileHotwords([]),'hot').label).toBe('未选择');
+  });
+  it('两端相同时保留选择意愿，明确展示内容原因；重新勾选不能绕过限制', () => {
+    const c = term('same','阿雷蒙','阿雷蒙');
+    expect(outputStatus(c,compileTranslations([c]),'translation')).toMatchObject({
+      label:'已选择，但未纳入', attention:true, adjustment:'content', reasons:['两端相同，无需锁定翻译'],
+    });
+    expect(outputStatus(c,compileHotwords([c]),'hot')).toMatchObject({attention:false,reasons:[]});
+    const unselected = {...c,translation:false};
+    expect(outputStatus(unselected,compileTranslations([unselected]),'translation')).toMatchObject({attention:false,reasons:[]});
+    expect(compileTranslations([{...unselected,translation:true}]).count).toBe(0);
+    const corrected = {...c,target:'ARaymond'};
+    expect(outputStatus(corrected,compileTranslations([corrected]),'translation')).toMatchObject({label:'已纳入',attention:false,reasons:[]});
   });
   it('旧 JSON 项目无需新字段也可恢复', () => {
     expect(CandidateSchema.parse(term('old','原词','Term'))).toMatchObject({source:'原词',target:'Term'});
