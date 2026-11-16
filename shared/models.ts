@@ -33,9 +33,9 @@ export const recommendedModels: Record<Provider, Recommendation[]> = {
   openai: [{ model: 'gpt-4.1-mini', outputMode: 'json_schema', maxOutputTokens: 8000, contextWindow: 128000 }],
   claude: [{ model: 'claude-sonnet-4-6', outputMode: 'prompt', maxOutputTokens: 8000, contextWindow: 200000 }],
   deepseek: [{ model: 'deepseek-flash', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }, { model: 'deepseek-v4-pro', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }],
-  zhipu: [{ model: 'glm-5.3', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }],
-  qwen: [{ model: 'qwen-plus', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }],
-  cloudflare: [{ model: '@cf/qwen/qwen3.8-27b', outputMode: 'json_schema', maxOutputTokens: 12000, contextWindow: 32768 }],
+  zhipu: [{ model: 'glm-5.3', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }, { model: 'glm-4.6v', outputMode: 'prompt', maxOutputTokens: 8000, contextWindow: 128000 }],
+  qwen: [{ model: 'qwen-plus', outputMode: 'json_object', maxOutputTokens: 8000, contextWindow: 128000, thinking: 'disabled' }, { model: 'qwen3-vl-plus', outputMode: 'prompt', maxOutputTokens: 8000, contextWindow: 128000 }],
+  cloudflare: [{ model: '@cf/qwen/qwen3.8-27b', outputMode: 'json_schema', maxOutputTokens: 12000, contextWindow: 32768 }, { model: '@cf/meta/llama-3.2-11b-vision-instruct', outputMode: 'prompt', maxOutputTokens: 8000, contextWindow: 128000 }],
 };
 export function modelDefaults(provider: Provider, model = recommendedModels[provider][0].model): ModelConfig {
   return ModelConfigSchema.parse({ provider, model, ...recommendedModels[provider].find(m => m.model === model) });

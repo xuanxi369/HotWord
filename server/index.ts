@@ -10,6 +10,8 @@ export default {
     await env.DB.batch([
       env.DB.prepare('DELETE FROM credentials WHERE expires_at IS NOT NULL AND expires_at<?').bind(Date.now()),
       env.DB.prepare('DELETE FROM job_secrets WHERE expires_at<?').bind(Date.now()),
+      // Recover abandoned synchronous seating calls after their 90-second deadline.
+      env.DB.prepare('UPDATE admissions SET active=0 WHERE active=1 AND created_at<? AND NOT EXISTS(SELECT 1 FROM jobs WHERE jobs.id=admissions.id)').bind(Date.now() - 10 * 60000),
     ]);
     const stale = await env.DB.prepare("SELECT id FROM jobs WHERE status IN ('queued','running') AND created_at<? LIMIT 100").bind(Date.now() - 3 * 3600000).all<{ id: string }>();
     for (const job of stale.results) {

@@ -2,6 +2,7 @@ import { endpoint, type ModelConfig, type Provider } from '../shared/models';
 import { HttpError } from './auth';
 import type { Env } from './env';
 
+export type ModelCallOptions = { image?: string; timeoutMs?: number; schemaName?: string };
 export type TokenUsage = { input: number; output: number; estimated: boolean };
 type ModelDiagnostic = { kind: 'timeout' | 'configuration' | 'authentication' | 'rate_limit' | 'unavailable'; code?: string; status?: number };
 export class ModelError extends HttpError {
@@ -23,18 +24,28 @@ function usageOf(raw: any, fallback: TokenUsage): TokenUsage {
   const cache = [u?.cache_creation_input_tokens, u?.cache_read_input_tokens].reduce((n: number, v: unknown) => n + (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : 0), 0);
   return { input: input + cache, output, estimated: false };
 }
-export function buildRequest(c: ModelConfig, system: string, text: string, schema?: object, probe = false) {
+export function buildRequest(c: ModelConfig, system: string, text: string, schema?: object, probe = false, options: ModelCallOptions = {}) {
   const cap = probe ? 128 : c.maxOutputTokens;
-  if (c.provider === 'cloudflare') return { messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
+  const image = options.image;
+  const schemaName = options.schemaName ?? 'conference_terms';
+  const content = image ? [{ type: 'text', text }, { type: 'image_url', image_url: { url: image } }] : text;
+  if (image && c.provider === 'cloudflare' && /(?:llama-3\.2-11b-vision-instruct|llava-1\.5-7b-hf)$/.test(c.model)) {
+    const bytes = atob(image.split(',')[1]);
+    return { image: Array.from(bytes, ch => ch.charCodeAt(0)), prompt: system + '\n' + text, max_tokens: cap };
+  }
+  if (c.provider === 'cloudflare') return { messages: [{ role: 'system', content: system }, { role: 'user', content }],
     ...(!probe && c.outputMode !== 'prompt' ? { response_format: c.outputMode === 'json_schema'
-      ? { type: 'json_schema', json_schema: { name: 'conference_terms', schema, strict: true } } : { type: 'json_object' } } : {}),
+      ? { type: 'json_schema', json_schema: { name: schemaName, schema, strict: true } } : { type: 'json_object' } } : {}),
     max_completion_tokens: cap, reasoning_effort: 'low', stream: false, store: false };
-  if (c.provider === 'openai') return { model: c.model, instructions: system, input: text, max_output_tokens: cap, store: false,
-    ...(!probe && c.outputMode !== 'prompt' ? { text: { format: c.outputMode === 'json_schema' ? { type: 'json_schema', name: 'conference_terms', strict: true, schema } : { type: 'json_object' } } } : {}) };
-  if (c.provider === 'claude') return { model: c.model, system, messages: [{ role: 'user', content: text }], max_tokens: cap, stream: false };
-  const body: Record<string, unknown> = { model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content: text }], max_tokens: cap, stream: false };
+  if (c.provider === 'openai') return { model: c.model, instructions: system, input: image ? [{ role: 'user', content: [{ type: 'input_text', text }, { type: 'input_image', image_url: image, detail: 'high' }] }] : text, max_output_tokens: cap, store: false,
+    ...(!probe && c.outputMode !== 'prompt' ? { text: { format: c.outputMode === 'json_schema' ? { type: 'json_schema', name: schemaName, strict: true, schema } : { type: 'json_object' } } } : {}) };
+  if (c.provider === 'claude') return { model: c.model, system, messages: [{ role: 'user', content: image ? [
+    { type: 'image', source: { type: 'base64', media_type: image.slice(5, image.indexOf(';')), data: image.split(',')[1] } },
+    { type: 'text', text },
+  ] : text }], max_tokens: cap, stream: false };
+  const body: Record<string, unknown> = { model: c.model, messages: [{ role: 'system', content: system }, { role: 'user', content }], max_tokens: cap, stream: false };
   if (!probe && c.outputMode !== 'prompt') body.response_format = c.outputMode === 'json_schema'
-    ? { type: 'json_schema', json_schema: { name: 'conference_terms', strict: true, schema } } : { type: 'json_object' };
+    ? { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } } : { type: 'json_object' };
   if (c.thinking !== 'default') {
     if (c.provider === 'qwen') body.enable_thinking = c.thinking === 'enabled';
     if (['deepseek', 'zhipu'].includes(c.provider)) body.thinking = { type: c.thinking };
@@ -113,16 +124,25 @@ async function responseJson(response: Response) {
   for (const c of chunks) { bytes.set(c, offset); offset += c.length; }
   return JSON.parse(new TextDecoder().decode(bytes));
 }
-export async function invokeModel(env: Env, c: ModelConfig, key: string, system: string, text: string, schema?: object, probe = false) {
-  const fallback: TokenUsage = { input: system.length + text.length + 256, output: probe ? 128 : c.maxOutputTokens, estimated: true };
+export async function invokeModel(env: Env, c: ModelConfig, key: string, system: string, text: string, schema?: object, probe = false, options: ModelCallOptions = {}) {
+  const fallback: TokenUsage = { input: system.length + text.length + 256 + (options.image ? 4096 : 0), output: probe ? 128 : c.maxOutputTokens, estimated: true };
   let raw: unknown;
   if (c.provider === 'cloudflare') {
     const started = Date.now();
     try {
-      const run = env.AI.run.bind(env.AI) as unknown as (model: string, input: Record<string, unknown>) => Promise<unknown>;
-      raw = await run(c.model, buildRequest(c, system, text, schema, probe));
+      const run = env.AI.run.bind(env.AI) as unknown as (model: string, input: Record<string, unknown>, options?: { signal: AbortSignal }) => Promise<unknown>;
+      if (options.timeoutMs) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const controller = new AbortController();
+        try {
+          raw = await Promise.race([run(c.model, buildRequest(c, system, text, schema, probe, options), { signal: controller.signal }), new Promise<never>((_, reject) => {
+            timer = setTimeout(() => { controller.abort(); reject(new Error('Model request timed out')); }, options.timeoutMs);
+          })]);
+        } finally { clearTimeout(timer); }
+      } else raw = await run(c.model, buildRequest(c, system, text, schema, probe, options));
     } catch (error) {
       const failure = cloudflareFailure(error, fallback);
+      if (options.image && failure.diagnostic?.kind === 'configuration') failure.message += '；座次识别还需确认所选模型支持图片输入';
       console.error('cloudflare_ai_call_failed', { model: c.model, durationMs: Date.now() - started, ...failure.diagnostic });
       throw failure;
     }
@@ -133,7 +153,7 @@ export async function invokeModel(env: Env, c: ModelConfig, key: string, system:
     let response: Response;
     // Workers supports only follow/manual. Inspect redirects explicitly instead
     // of using Node's "error" mode, which throws before the request is sent.
-    try { response = await fetch(endpoint(c), { method: 'POST', headers, body: JSON.stringify(buildRequest(c, system, text, schema, probe)), redirect: 'manual', signal: AbortSignal.timeout(120000) }); }
+    try { response = await fetch(endpoint(c), { method: 'POST', headers, body: JSON.stringify(buildRequest(c, system, text, schema, probe, options)), redirect: 'manual', signal: AbortSignal.timeout(options.timeoutMs ?? 120000) }); }
     catch { throw new ModelError('模型连接超时或网络异常，请重试。未切换使用模式或密钥。', true, fallback); }
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
@@ -144,6 +164,7 @@ export async function invokeModel(env: Env, c: ModelConfig, key: string, system:
       const messages: Record<number, string> = { 400: '模型参数或工作空间不匹配，请检查模型能力、区域和工作空间', 401: 'API Key 无效或已过期，请重新配置',
         403: 'API Key 没有所选模型或工作空间的权限', 404: '模型或工作空间不存在，请检查模型 ID、区域和工作空间',
         402: '服务商账户余额不足，请充值或手动选择其他服务', 429: '服务商额度不足或请求过于频繁，请稍后重试' };
+      if (options.image) messages[400] = '所选模型无法处理图片，或参数与工作空间不匹配，请确认视觉能力与模型配置，或使用手动分区';
       throw new ModelError(messages[response.status] ?? '服务商暂时不可用，请稍后重试', response.status === 429 || response.status >= 500,
         response.status >= 500 ? fallback : { input: 0, output: 0, estimated: false });
     }

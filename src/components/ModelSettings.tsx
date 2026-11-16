@@ -13,7 +13,7 @@ export function ModelFields({ value, onChange, team = false }: { value: ModelCon
   return <div className="model-fields">
     <label>服务商<select value={value.provider} onChange={e => onChange(modelDefaults(e.target.value as Provider))}>{Object.entries(providerNames).filter(([p]) => team || p !== 'cloudflare').map(([p, n]) => <option key={p} value={p}>{n}</option>)}</select></label>
     <label>模型<select value={custom ? '' : value.model} onChange={e => onChange({ ...modelDefaults(value.provider, e.target.value || 'custom-model'), model: e.target.value, region: value.region, workspace: value.workspace })}>{models.map(m => <option key={m.model} value={m.model}>{m.model}</option>)}<option value="">手动填写模型 ID</option></select></label>
-    {custom && <label>模型 ID<input value={value.model} maxLength={120} onChange={e => patch({ model: e.target.value })} placeholder="填写账号已开放的文本模型 ID"/></label>}
+    {custom && <label>模型 ID<input value={value.model} maxLength={120} onChange={e => patch({ model: e.target.value })} placeholder="填写账号已开放的模型 ID"/></label>}
     {value.provider === 'qwen' && <label>千问区域<select value={value.region} onChange={e => patch({ region: e.target.value as ModelConfig['region'] })}>{Object.entries(qwenRegions).map(([r, n]) => <option key={r} value={r}>{n}</option>)}</select></label>}
     {['qwen', 'claude'].includes(value.provider) && <label>{value.provider === 'qwen' ? '业务空间 ID（推荐）' : '工作空间 ID'}<input value={value.workspace} maxLength={80} onChange={e => patch({ workspace: e.target.value })} placeholder={value.provider === 'qwen' ? '例如 llm-xxx；须与 API Key 区域一致' : '未绑定工作空间的密钥需填写 wrkspc_…'}/></label>}
     <p className="endpoint-note">所选服务地址：{address}</p>

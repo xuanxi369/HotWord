@@ -3,6 +3,8 @@ import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { AlertTriangle, ArrowLeft, ArrowLeftRight, ArrowRight, Check, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, Download, Ellipsis, FileCheck2, FileText, FolderOpen, Globe2, Layers3, LoaderCircle, Moon, Sun, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api';
+import { WorkspaceHeader } from './components/WorkspaceHeader';
+import type { WorkspacePage } from './pages';
 import type { Theme } from './theme';
 import { CandidateSchema, categoryNames, type Candidate, type Category, type ExtractionResult, type Job, type ParsedFile } from '../shared/schema';
 import { applyCandidatePatch, needsReview, outputIndex, outputStatus } from '../shared/review';
@@ -26,7 +28,7 @@ export type WorkbenchTransfer = { id: number; page: WorkbenchPage; job?: Job; pr
 type WorkbenchProps = {
   page: WorkbenchPage; active: boolean; session: WorkspaceSession; theme: Theme; setTheme: (theme: Theme) => void;
   transfer?: WorkbenchTransfer; targetBusy: boolean;
-  navigate: (page: WorkbenchPage, transfer?: Omit<WorkbenchTransfer, 'id' | 'page'>) => void;
+  navigate: (page: WorkspacePage, transfer?: Omit<WorkbenchTransfer, 'id' | 'page'>) => void;
   onAvailabilityChange: (page: WorkbenchPage, busy: boolean) => void;
 };
 type Toast = { id: number; message: string; action?: () => void };
@@ -374,11 +376,10 @@ export default function Workbench({ page: workbenchPage, active, session, theme,
   if (!active) return null;
   return <MotionConfig reducedMotion="user" transition={reduced ? { duration: 0 } : spring}><Tooltip.Provider delayDuration={350}>
     <div className={`layout stage-${stage} ${showIntro ? 'with-intro' : ''}`}>
-      <header className="app-header">
-        <a className="brand" href="#workspace" onClick={() => goTo(1)} aria-label="HotWord 工作台"><span className="brand-mark"><Layers3 size={21}/></span><strong>HotWord<span>让对话，少一点误解。</span></strong></a>
-        <nav className="header-nav workbench-nav" aria-label="工作台导航"><button className={`workspace-link ${!multilingual ? 'header-current' : ''}`} aria-current={!multilingual ? 'page' : undefined} onClick={() => navigate('conference')}>会议词库</button><button className={`workspace-link ${multilingual ? 'header-current' : ''}`} aria-current={multilingual ? 'page' : undefined} onClick={() => navigate('multilingual')}>多语对照</button><button onClick={() => setHistoryOpen(true)}><Clock3 size={15}/>近期任务{jobs.length > 0 && <small>{jobs.length}</small>}</button></nav>
-        <div className="header-actions"><Tip text={theme === 'dark' ? '切换到明亮模式' : '切换到暗夜模式'}><button className="icon-button theme-button" aria-label={theme === 'dark' ? '切换到明亮模式' : '切换到暗夜模式'} aria-pressed={theme === 'dark'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={18}/> : <Moon size={18}/>}</button></Tip><Tip text="继续编辑已保存的 JSON 项目"><button className="icon-button" aria-label="导入审核项目" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={18}/></button></Tip><Tip text="模型与密钥"><button className="icon-button" aria-label="模型与密钥" onClick={() => setModelOpen(true)}><Settings2 size={18}/></button></Tip><Tip text="使用指南"><button className="icon-button" aria-label="使用指南" onClick={() => setHelpOpen(true)}><CircleHelp size={18}/></button></Tip><span className="header-divider"/><Tip text={user?.email || '正在验证登录'}><span className="avatar" aria-label={user?.local ? '本地开发模式' : '团队成员'}>{user?.email?.[0]?.toUpperCase() || 'H'}</span></Tip></div>
-      </header>
+      <WorkspaceHeader page={workbenchPage} navigate={navigate} theme={theme} setTheme={setTheme} email={user?.email} local={user?.local} onHome={() => goTo(1)} onModels={() => setModelOpen(true)} onHelp={() => setHelpOpen(true)}>
+        <Tip text="近期任务"><button className="icon-button history-button" aria-label="近期任务" onClick={() => setHistoryOpen(true)}><Clock3 size={15}/><span>近期任务</span>{jobs.length > 0 && <small>{jobs.length}</small>}</button></Tip>
+        <Tip text="继续编辑已保存的 JSON 项目"><button className="icon-button" aria-label="导入审核项目" disabled={busy || running} onClick={() => projectInput.current?.click()}><FolderOpen size={18}/></button></Tip>
+      </WorkspaceHeader>
       <main id="workspace">
         {showIntro && <div className="intro">
           <div className="eyebrow"><span/>A LITTLE PREPARATION. A BETTER CONVERSATION.</div>

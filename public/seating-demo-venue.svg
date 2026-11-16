@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="650" viewBox="0 0 1100 650">
+<defs><pattern id="dots" width="14" height="14" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#dee5df"/></pattern><g id="seat"><rect width="56" height="44" rx="5" fill="white" stroke="#d9e3dc"/><path d="M13 15h30v17H13z" fill="#eff5f1" stroke="#7c9d89"/></g></defs>
+<rect width="1100" height="650" fill="#f7faf7"/><rect width="1100" height="650" fill="url(#dots)"/>
+<g font-family="Microsoft YaHei,Arial" font-size="20" text-anchor="middle"><rect x="340" y="45" width="420" height="80" rx="8" fill="#477c66"/><text x="550" y="93" fill="white">主舞台</text>
+<rect x="315" y="165" width="470" height="94" rx="8" fill="white" stroke="#e0dce9"/><path d="M323 165h454a8 8 0 0 1 8 8v23H315v-23a8 8 0 0 1 8-8" fill="#7a659a"/><text x="550" y="187" fill="white" font-size="16">A区 · 沙发区 · 1排 × 4列</text>
+<use href="#seat" x="403" y="205"/><use href="#seat" x="482" y="205"/><use href="#seat" x="561" y="205"/><use href="#seat" x="640" y="205"/>
+<rect x="44" y="345" width="300" height="240" rx="8" fill="white" stroke="#d3dfd8"/><rect x="385" y="345" width="330" height="240" rx="8" fill="white" stroke="#d3dfd8"/><rect x="756" y="345" width="300" height="240" rx="8" fill="white" stroke="#d3dfd8"/>
+<g fill="#477c66"><rect x="44" y="345" width="300" height="36" rx="6"/><rect x="385" y="345" width="330" height="36" rx="6"/><rect x="756" y="345" width="300" height="36" rx="6"/></g>
+<g fill="white" font-size="16"><text x="194" y="370">B区 · 2排 × 3列</text><text x="550" y="370">C区 · 2排 × 4列</text><text x="906" y="370">D区 · 2排 × 3列</text></g>
+<use href="#seat" x="82" y="410"/><use href="#seat" x="166" y="410"/><use href="#seat" x="250" y="410"/><use href="#seat" x="82" y="480"/><use href="#seat" x="166" y="480"/><use href="#seat" x="250" y="480"/>
+<use href="#seat" x="410" y="410"/><use href="#seat" x="486" y="410"/><use href="#seat" x="562" y="410"/><use href="#seat" x="638" y="410"/><use href="#seat" x="410" y="480"/><use href="#seat" x="486" y="480"/><use href="#seat" x="562" y="480"/><use href="#seat" x="638" y="480"/>
+<use href="#seat" x="794" y="410"/><use href="#seat" x="878" y="410"/><use href="#seat" x="962" y="410"/><use href="#seat" x="794" y="480"/><use href="#seat" x="878" y="480"/><use href="#seat" x="962" y="480"/>
+<text x="550" y="625" font-size="15" fill="#87938b">示例会场 · 仅用于体验</text></g></svg>

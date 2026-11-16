@@ -7,3 +7,6 @@ import './multilingual.css';
 import './background.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
+
+import './seating/styles.css';
+import './surfaces.css';

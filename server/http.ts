@@ -8,6 +8,7 @@ import { invokeModel, ModelError } from './providers';
 import { deleteObjects, releaseTask } from './store';
 import type { Env } from './env';
 import { deploymentDiagnostics, isDatabaseSchemaError } from './diagnostics';
+import { analyzeSeating } from './seating';
 
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 export async function fetchApi(request: Request, env: Env): Promise<Response> {
@@ -17,6 +18,7 @@ export async function fetchApi(request: Request, env: Env): Promise<Response> {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) enforceOrigin(request);
     if (url.pathname === '/api/me' && method === 'GET') response = json({ email: user.email, local: user.local, role: isAdmin(env, user) ? 'admin' : 'member' });
     else if (url.pathname === '/api/models' && method === 'GET') response = json(await settings(env, user.email));
+    else if (url.pathname === '/api/seating/analyze' && method === 'POST') response = json(await analyzeSeating(env, user.email, await boundedJson(request, 5 * 1024 * 1024)));
     else if (url.pathname === '/api/credentials' && method === 'POST') {
       const input = CredentialInputSchema.parse(await boundedJson(request, 10000));
       response = json(await saveCredential(env, user.email, input), 201);
