@@ -63,7 +63,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, busy, title, children,
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function OverlayPanel({ open, onOpenChange, title, description, children, className = '' }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; description: string; children: ReactNode; className?: string }) {
+export function OverlayPanel({ open, onOpenChange, title, description, children, className = '', initialFocus }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; description: string; children: ReactNode; className?: string; initialFocus?: () => HTMLElement | null }) {
   const restoreFocus = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -80,7 +80,7 @@ export function OverlayPanel({ open, onOpenChange, title, description, children,
   }, [open, onOpenChange]);
   return <Dialog.Root open={open} onOpenChange={onOpenChange}><Dialog.Portal>
     <Dialog.Overlay className="dialog-overlay"/>
-    <Dialog.Content ref={content} className={`dialog-content detail-dialog ${className}`} onOpenAutoFocus={() => { restoreFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }} onCloseAutoFocus={e => {
+    <Dialog.Content ref={content} className={`dialog-content detail-dialog ${className}`} onOpenAutoFocus={e => { restoreFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; const target = initialFocus?.(); if (target) { e.preventDefault(); target.focus(); } }} onCloseAutoFocus={e => {
       e.preventDefault();
       if (restoreFocus.current?.isConnected) restoreFocus.current.focus();
       else document.querySelector<HTMLButtonElement>('#workflow button[aria-current="step"]')?.focus();

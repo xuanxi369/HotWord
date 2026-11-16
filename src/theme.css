@@ -20,10 +20,18 @@
 .term-output-notice b { font-size: 11px; font-weight: 600; line-height: 1.7; }
 .term-output-notice p { margin: 3px 0 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .term-output-notice .button { flex-shrink: 0; min-height: 34px; }
-.term-edit-help { color: var(--muted); font-size: 11px; line-height: 1.8; }
 .button.translation-join-button { min-height: 34px; font-size: 11px; }
-.translation-join-step { font-weight: 550; }
-.translation-join-blocked { margin: 12px 0; color: #94673b; font-size: 11px; line-height: 1.8; }
+.term-editor-form .term-edit-fields { grid-template-columns: 1fr; }
+.term-editor-details { border-top: 1px solid var(--line); padding: 13px 0; }
+.term-editor-details > summary { cursor: pointer; font-size: 12px; color: var(--ink); }
+.term-editor-details .evidence-card { margin-top: 12px; }
+.term-editor-priority { display: grid; gap: 14px; margin: 15px 0 23px; font-size: 11px; }
+.term-editor-help { color: var(--muted); font-size: 11px; line-height: 1.8; }
+.term-editor-details .remove-term { margin-top: 9px; font-size: 11px; }
+.term-editor-issue { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 15px; padding: 10px 12px; border: 1px solid #eadbc6; border-radius: 9px; background: #fcf8f1; color: #805a30; }
+.term-editor-issue > svg { margin-top: 3px; }
+.term-editor-issue p { margin: 0; font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.dialog-actions.term-editor-actions { justify-content: flex-end; gap: 10px; margin-top: 14px; padding-top: 15px; border-top: 1px solid var(--line); }
 @media(max-width:600px) {
   .translation-assist { align-items: flex-start; flex-direction: column; gap: 10px; padding: 12px 14px; }
   .translation-assist-actions { gap: 12px; }
@@ -75,7 +83,7 @@
 :root[data-theme='dark'] :is(.risk-note, .pin-label, .output-status.limited, .warnings .disclosure-trigger, .warnings ul) { color: #d0bfdc; }
 :root[data-theme='dark'] .term-output-notice { background: #302938; border-color: #665278; color: #d0bfdc; }
 :root[data-theme='dark'] .term-status.limited { color: #d0bfdc; }
-:root[data-theme='dark'] .translation-join-blocked { color: #d0bfdc; }
+:root[data-theme='dark'] .term-editor-issue { background: #302938; border-color: #665278; color: #d0bfdc; }
 :root[data-theme='dark'] :is(.error-text, .remove-term) { color: #e3afa9; }
 :root[data-theme='dark'] :is(.export-notice, .example-alert) { background: #2d2735; border-color: #51455f; color: #d0bfdc; }
 :root[data-theme='dark'] .alert.error { background: #322628; border-color: #624447; color: #e3b4ad; }

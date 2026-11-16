@@ -10,7 +10,18 @@ export function termRisk(source: string, target: string, category: Category): st
 }
 
 export function needsReview(c: Candidate) {
-  return Boolean(c.reviewReason || c.translationReview || (c.basis === 'suggested' && !c.translation) || /[/／]/.test(c.source + c.target));
+  return Boolean(c.reviewReason || c.translationReview || (c.target.trim() && !c.translation) || /[/／]/.test(c.source + c.target));
+}
+
+export function applyCandidatePatch(c: Candidate, patch: Partial<Candidate>): Candidate {
+  const textChanged = (patch.source !== undefined && patch.source !== c.source) || (patch.target !== undefined && patch.target !== c.target);
+  return {
+    ...c,
+    ...(textChanged ? { translation: false, translationAuto: false } : {}),
+    ...patch,
+    ...('translation' in patch ? { translationAuto: false, ...(patch.translation ? { translationReview: undefined } : {}) } : {}),
+    ...(patch.category ? { reviewReason: undefined, categoryEvidence: '已手动选择类别' } : {}),
+  };
 }
 
 export type OutputStatus = { label: string; detail: string; attention: boolean; reasons: string[]; adjustment?: 'content' | 'budget' };

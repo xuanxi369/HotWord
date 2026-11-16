@@ -29,8 +29,8 @@ function pack(entries: Entry[], limit: number, excluded: Exclusion[], changes: s
     if (seen.has(entry.key)) { included.push({ id: entry.id, term: entry.term, reused: true }); continue; }
     const cost = entry.term.length + Number(accepted.length > 0);
     if (chars + cost > limit) {
-      excluded.push({ id: entry.id, term: entry.term, reason: entry.pinned ? '必保条目超出上限' : '字符预算不足，保留了更高优先级的完整条目' });
-      if (entry.pinned) errors.push('必保条目超过字符上限，请减少必保项后下载');
+      excluded.push({ id: entry.id, term: entry.term, reason: entry.pinned ? '必须保留条目超出上限' : '字符预算不足，保留了更高优先级的完整条目' });
+      if (entry.pinned) errors.push('必须保留条目超过字符上限，请减少必须保留项后下载');
       continue;
     }
     seen.add(entry.key);
@@ -46,7 +46,7 @@ export function compileHotwords(candidates: Candidate[]): Compiled {
     const sourceIssue = termIssue(c.source);
     if (sourceIssue) {
       excluded.push({ id: c.id, term: c.source, reason: sourceIssue });
-      if (c.pinned) qualityErrors.push('必保项包含非术语内容，请修正或取消必保');
+      if (c.pinned) qualityErrors.push('必须保留项包含非术语内容，请修正或取消必须保留');
       continue;
     }
     // Both languages are complete hotword entries; no split on spaces or slash.
@@ -54,7 +54,7 @@ export function compileHotwords(candidates: Candidate[]): Compiled {
       const issue = termIssue(raw);
       if (issue) {
         excluded.push({ id: c.id, term: raw, reason: issue });
-        if (c.pinned) qualityErrors.push('必保项包含非术语内容，请修正或取消必保');
+        if (c.pinned) qualityErrors.push('必须保留项包含非术语内容，请修正或取消必须保留');
         continue;
       }
       const term = normalizeTerm(raw);
@@ -77,7 +77,7 @@ export function compileTranslations(candidates: Candidate[], bidirectional = fal
     const issue = termIssue(c.source) || termIssue(c.target);
     if (issue) {
       excluded.push({ id: c.id, term: c.source, reason: issue });
-      if (c.pinned) qualityErrors.push('必保指定翻译包含非术语内容，请修正或取消必保');
+      if (c.pinned) qualityErrors.push('必须保留指定翻译包含非术语内容，请修正或取消必须保留');
       continue;
     }
     if (source !== c.source) changes.push(`${c.source} → ${source}`);
@@ -100,7 +100,7 @@ export function compileTranslations(candidates: Candidate[], bidirectional = fal
   });
   const result = pack(entries, TRANSLATION_LIMIT, excluded, changes);
   result.errors.push(...new Set(qualityErrors));
-  if (proposed.some(p => p.pinned && targets.get(p.sourceKey)!.size > 1)) result.errors.push('必保指定翻译存在冲突，请先解决');
+  if (proposed.some(p => p.pinned && targets.get(p.sourceKey)!.size > 1)) result.errors.push('必须保留指定翻译存在冲突，请先解决');
   validateExport(result.content, 'translation');
   return result;
 }

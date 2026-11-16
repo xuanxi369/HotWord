@@ -1,10 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { compileHotwords, compileTranslations } from '../shared/compiler';
-import { outputStatus } from '../shared/review';
+import { applyCandidatePatch, needsReview, outputStatus } from '../shared/review';
 import { translationSelectionStatus } from '../shared/translation-review';
 import { CandidateSchema, type Candidate } from '../shared/schema';
 const term = (id: string, source: string, target: string, patch: Partial<Candidate> = {}): Candidate => ({ id, source, target, category: 'industry', priority: 70, basis: 'source', evidence: '', location: '', hot: true, translation: true, pinned: false, ...patch });
 describe('真实导出状态', () => {
+  it('输入首字符保留待核对原因，手动译法在确认前仍属于待审核', () => {
+    const original = term('editing','商传琳','Ms. Yi Chuanlin',{translation:false,translationReview:'需要核对姓名译法'});
+    const edited = applyCandidatePatch(original,{target:'Ms. Yi ChuanlinA',basis:'manual'});
+    expect(edited.translationReview).toBe(original.translationReview);
+    expect(needsReview(edited)).toBe(true);
+    expect(needsReview({...edited,translationReview:undefined})).toBe(true);
+    const confirmed = applyCandidatePatch(edited,{translation:true});
+    expect(confirmed.translationReview).toBeUndefined();
+    expect(needsReview(confirmed)).toBe(false);
+  });
+  it('更改原词或译文会取消旧的确认，避免新内容沿用旧映射状态', () => {
+    const original = term('confirmed','无水染色','Waterless Dyeing',{translationAuto:true});
+    expect(applyCandidatePatch(original,{source:'无水染色技术'})).toMatchObject({translation:false,translationAuto:false});
+    expect(applyCandidatePatch(original,{target:'Waterless Dyeing Technology'})).toMatchObject({translation:false,translationAuto:false});
+    expect(applyCandidatePatch(original,{priority:90})).toMatchObject({translation:true,translationAuto:true});
+    expect(original.translationAuto).toBe(true);
+  });
+  it('取消指定翻译不会把尚未解决的核对问题清掉', () => {
+    const original = term('reason','姓名实体','Possible Name',{translationReview:'缺少官方姓名对照'});
+    expect(applyCandidatePatch(original,{translation:false}).translationReview).toBe(original.translationReview);
+  });
   it('热词预算不足不等于指定翻译未纳入，显示部分接受和完整接受', () => {
     const c = term('c','术语', 'English Phrase '.repeat(140));
     expect(outputStatus(c,compileHotwords([c]),'hot')).toMatchObject({label:'部分纳入',attention:true,adjustment:'budget'});

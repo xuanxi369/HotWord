@@ -20,14 +20,14 @@ export function compileMultilingualHotwords(candidates: Candidate[], languagePai
     const sourceIssue = multilingualTermIssue(candidate.source) || (languagePair && multilingualLanguageIssue(candidate.source, languagePair.source));
     if (sourceIssue) {
       excluded.push({ id: candidate.id, term: candidate.source, reason: sourceIssue });
-      if (candidate.pinned) errors.push('必保项包含非术语内容，请修正或取消必保');
+      if (candidate.pinned) errors.push('必须保留项包含非术语内容，请修正或取消必须保留');
       continue;
     }
     const targetEligible = candidate.target && (candidate.basis !== 'suggested' || candidate.translation);
     const targetIssue = targetEligible ? multilingualTermIssue(candidate.target) || (languagePair && multilingualLanguageIssue(candidate.target, languagePair.target)) : undefined;
     if (targetIssue) {
       excluded.push({ id: candidate.id, term: candidate.target, reason: targetIssue });
-      if (candidate.pinned) errors.push('必保项包含非术语内容，请修正或取消必保');
+      if (candidate.pinned) errors.push('必须保留项包含非术语内容，请修正或取消必须保留');
       eligible.push({ ...candidate, target: '' });
     } else eligible.push(candidate);
   }
@@ -41,7 +41,7 @@ export function compileMultilingualTranslations(candidates: Candidate[], bidirec
       || (candidate.target && (multilingualTermIssue(candidate.target) || (languagePair && multilingualLanguageIssue(candidate.target, languagePair.target)))));
     if (issue) {
       excluded.push({ id: candidate.id, term: candidate.source, reason: issue });
-      if (candidate.pinned) errors.push('必保指定翻译包含非术语内容，请修正或取消必保');
+      if (candidate.pinned) errors.push('必须保留指定翻译包含非术语内容，请修正或取消必须保留');
     } else eligible.push(candidate);
   }
   return withQuality(compileTranslations(eligible, bidirectional), excluded, errors, joiningNotes(eligible, 'translation'));
