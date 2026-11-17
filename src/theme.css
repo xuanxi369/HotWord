@@ -130,7 +130,7 @@
 :root[data-theme='dark'] .guide-steps li:nth-child(3) > span { background: #332e3b; color: #c7bad7; }
 :root[data-theme='dark'] .sheet-front { color: var(--accent); }
 :root[data-theme='dark'] :is(.sheet-front small, .sheet-mid b, .art-word, .art-word span, .art-spark, .upload-cta, .model-summary-icon) { color: #c7bad7; }
-:root[data-theme='dark'] .brand-mark { background: linear-gradient(145deg,#41394a,#262329); color: #f0eaf7; }
+:root[data-theme='dark'] .brand-mark { color: #f0eaf7; }
 :root[data-theme='dark'] .header-current::before, :root[data-theme='dark'] :is(.status-dot.completed, .eyebrow > span) { background: #b6a0d1; }
 :root[data-theme='dark'] .eyebrow > span { box-shadow: 0 0 0 3px #44364f; }
 :root[data-theme='dark'] .art-orbit, :root[data-theme='dark'] .art-orbit::after { border-color: #49404f; }
