@@ -459,7 +459,7 @@ export default function Workbench({ page: workbenchPage, active, session, theme,
           </div>
           {warnings.length > 0 && <Disclosure className="warnings" title={`${warnings.length} 条资料 / 审核提示`} open={warningsOpen} onToggle={() => setWarningsOpen(!warningsOpen)}><ul>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></Disclosure>}
           {stage === 1 && !parsed && !running && <div className="start-shortcuts"><button className="text-button" disabled={busy} onClick={showExample}><span className="play-dot"><ArrowRight size={12}/></span>先试试一个小示例</button><span className="shortcut-divider"/><button className="text-button" disabled={busy} onClick={() => projectInput.current?.click()}><FolderOpen size={14}/>继续已有项目</button></div>}
-          <footer><span>少一点误解，多一点默契。</span><span className="footer-language"><Globe2 size={12}/>{pair ? languagePairLabel(pair) : '中英双语'}<span className="footer-divider">·</span>HotWord</span></footer>
+          <footer><span>©IIEAO·Charles</span><span className="footer-language"><Globe2 size={12}/>{pair ? languagePairLabel(pair) : '中英双语'}<span className="footer-divider">·</span>HotWord</span></footer>
         </div>
       </main>
       <ModelPanel settings={modelSettings} loading={modelsLoading} loadError={modelsError} selection={selection} onSelect={setSelection} open={modelOpen} onOpenChange={setModelOpen} refresh={refreshModels} admin={user?.role === 'admin'}/>

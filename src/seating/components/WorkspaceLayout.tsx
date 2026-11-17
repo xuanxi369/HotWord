@@ -7,7 +7,7 @@ export function WorkspaceLayout({ work, disabled, children }: { work: RosterWork
   const { view, setView, reading, busy, exporting, exported, error, setError, notice, loadDemo } = work;
   return <main id="seating-workspace">
     <div className="page-heading">
-      <div><span className="eyebrow">让每一位来宾都有归属</span><h1>{view === 'upload' ? '从座次表，到人员库。' : '核对一下，就可以导出。'}</h1>
+      <div><span className="eyebrow">草稿保存在浏览器，请留意</span><h1>{view === 'upload' ? '座次表-人员库。' : '核对，即可导出。'}</h1>
         <p>{view === 'upload' ? '上传座次图和 Excel，识别分区，核对后带走完整名单。' : `${excelName} · ${resultModel}`}</p></div>
       <div className="heading-actions">{view === 'upload'
         ? <button className="secondary-btn" onClick={loadDemo} disabled={busy || reading || exporting || disabled}><Sparkles size={16}/>体验示例</button>
@@ -24,6 +24,6 @@ export function WorkspaceLayout({ work, disabled, children }: { work: RosterWork
     {error && <div className="error-box" role="alert"><AlertCircle size={18}/>{error}<button className="icon-btn" aria-label="关闭错误提示" onClick={() => setError('')}><X size={16}/></button></div>}
     {notice && <div className="notice-box" role="status"><CheckCircle2 size={17}/>{notice}</div>}
     {children}
-    <footer className="page-footer"><span>姓名 · 手机号 · 单位 · 职务 · 分座区域</span><span>草稿保存在此浏览器，请留意保存状态。</span></footer>
+    <footer className="page-footer"><span>©IIEAO·Charles</span><span>Charles@iieao.com</span></footer>
   </main>;
 }
