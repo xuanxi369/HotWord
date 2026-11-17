@@ -1,10 +1,10 @@
 /* Code-only controls: 0 is fully transparent, 1 is opaque. Text stays opaque.
    Tune these values for all three workspaces; no opacity control is exposed in UI. */
 :root {
-  --card-alpha: .68;
-  --inner-alpha: .38;
-  --dialog-alpha: .94;
-  --card-blur: 18px;
+  --card-alpha: .37;
+  --inner-alpha: .29;
+  --dialog-alpha: .43;
+  --card-blur: 19px;
   --card-rgb: 255 255 255;
   --inner-rgb: 250 252 248;
   --card-surface: rgb(var(--card-rgb) / var(--card-alpha));

@@ -4,10 +4,10 @@
 #root { isolation: isolate; }
 .ambient-background { position: fixed; inset: 0; z-index: -1; background: #f8fafc; overflow: hidden; pointer-events: none; transition: background-color .5s ease; }
 .ambient-layer { position: absolute; inset: 0; will-change: transform; }
-.ambient-orb { position: absolute; border-radius: 50%; filter: blur(100px); opacity: .45; will-change: transform; }
-.ambient-blue { width: 60vw; height: 60vw; background: #3b82f6; top: -15%; left: -10%; animation: ambient-drift-blue 25s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
-.ambient-pink { width: 50vw; height: 50vw; background: #ec4899; bottom: -15%; right: -10%; animation: ambient-drift-pink 30s infinite cubic-bezier(.4, 0, .2, 1) alternate-reverse; }
-.ambient-mint { width: 45vw; height: 45vw; background: #10b981; top: 25%; left: 25%; animation: ambient-drift-mint 20s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
+.ambient-orb { position: absolute; border-radius: 50%; filter: blur(100px); opacity: .55; will-change: transform; }
+.ambient-blue { width: 55vw; height: 55vw; background: #3b82f6; top: -15%; left: -10%; animation: ambient-drift-blue 25s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
+.ambient-pink { width: 60vw; height: 60vw; background: #ec4899; bottom: -15%; right: -10%; animation: ambient-drift-pink 19s infinite cubic-bezier(.4, 0, .2, 1) alternate-reverse; }
+.ambient-mint { width: 55vw; height: 55vw; background: #10b981; top: 25%; left: 25%; animation: ambient-drift-mint 20s infinite cubic-bezier(.4, 0, .2, 1) alternate; }
 
 @keyframes ambient-drift-blue {
   0% { transform: translate(0, 0) scale(1) rotate(0deg); }
@@ -30,7 +30,7 @@
 }
 
 :root[data-theme='dark'] .ambient-background { background: #080c17; }
-:root[data-theme='dark'] .ambient-orb { opacity: .35; filter: blur(120px); }
+:root[data-theme='dark'] .ambient-orb { opacity: .49; filter: blur(120px); }
 .ambient-background[data-paused='true'] .ambient-orb { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .ambient-background { transition: none; }
